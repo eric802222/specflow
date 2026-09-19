@@ -1,0 +1,30 @@
+# rules.template.yaml — DMN 風格 2D 決策表
+#
+# 每個 rule 是 conditions(輸入) → outcome(輸出) 的一列，用來攤平巢狀 if-else。
+# 本檔可直接被拿來當單元測試的資料源：每一列 when/then 都是一組測試案例。
+
+id: RULE-XXXX
+title: <這組決策表在決定什麼>
+
+inputs:
+  - key: <input_key_1>
+    description: <說明>
+  - key: <input_key_2>
+    description: <說明>
+
+outputs:
+  - key: <output_key>
+    description: <說明>
+
+rules:
+  - when:
+      <input_key_1>: <值>
+      <input_key_2>: <值>
+    then:
+      <output_key>: <值>
+
+  - when:
+      <input_key_1>: <值>
+      <input_key_2>: <值>
+    then:
+      <output_key>: <值>

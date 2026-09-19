@@ -1,0 +1,22 @@
+# glossary.yaml — 領域詞彙表（Ubiquitous Language）
+#
+# 每個 term 定義：key（程式碼使用的識別碼）、term（中文名稱）、description，
+# 以及可選的 status 列舉。cross_spec_lint 會用這裡宣告的 status 列舉，
+# 檢查其他規格檔（logic/rules、logic/lifecycle 等）是否引用了未定義的狀態值。
+
+version: 1
+
+terms:
+  - key: deal
+    term: 交易 / 報價單
+    description: <一句話定義>
+    status:
+      - draft
+      - pending_approval
+      - approved
+      - rejected
+
+  - key: <entity_key>
+    term: <中文名稱>
+    description: <一句話定義>
+    status: []
