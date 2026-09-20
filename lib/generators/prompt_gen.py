@@ -3,6 +3,9 @@
 刻意不落地成任何新檔案——這是純函式 + CLI 輸出，RD 自己複製貼上或接到別的工具。
 如果把輸出寫成 changes/<id>/ 底下的第三個檔案，會直接違反 change_shape_lint 的
 白名單（那條線是刻意畫的：change 資料夾只能有 proposal.md、tasks.md，不能再多）。
+
+輸出裡必須包含 tasks.md 的完整內容，不能只有 proposal 摘要跟 diff——不然 commit
+訊息要求的 `<task-id>` 格式，AI 根本沒拿到 task 清單可以引用，契約不完整。
 """
 
 from __future__ import annotations
@@ -25,6 +28,9 @@ PROMPT_TEMPLATE = """\
 
 {proposal_body}
 
+## Tasks
+{tasks_section}
+
 ## Blast Radius
 {blast_radius_summary}
 
@@ -36,8 +42,10 @@ PROMPT_TEMPLATE = """\
 2. 若 diff 修改了 db/schema.dbml，同步更新對應的 migration。
 3. 若 diff 修改了 api/main.tsp，重新編譯 OpenAPI 並更新對應的 handler/DTO。
 4. 若 diff 修改了 logic/rules/*.yaml，用該決策表的每一列作為單元測試案例。
-5. commit 訊息使用 `<verb>({change_id}/<task-id>): <message>` 格式。
-6. 完成後列出你觸碰到的檔案清單，供人工比對 Impact Surface 是否吻合。
+5. 每完成一個 task 就 commit 一次，訊息用 `<verb>({change_id}/<task-id>): <message>`
+   格式，<task-id> 必須對應上面 Tasks 清單裡的其中一項。
+6. 完成後列出你觸碰到的檔案清單，供人工比對 Impact Surface 與各 task 的
+   touches 是否吻合。
 """
 
 
@@ -55,11 +63,27 @@ def get_specs_diff(specs_dir: Path, base_ref: str = "HEAD") -> str:
         raise RuntimeError(f"git diff 失敗：{exc.stderr}") from exc
 
 
+def _read_tasks_section(tasks_path: Path) -> str:
+    """讀出 tasks.md 的正文（不含 frontmatter），保留原始順序跟每行內容原封不動。"""
+    if not tasks_path.exists():
+        return "(尚未建立 tasks.md)"
+
+    text = tasks_path.read_text(encoding="utf-8")
+    _fm_data, body, error = fm.load_frontmatter_data(text)
+    if error:
+        # frontmatter 壞掉也不要整個 prompt 產生失敗——這裡只是把原始內容原樣
+        # 附上，真正的格式問題應該在 gate_check 那一關就被擋下來，這裡是最後防線。
+        return text.strip()
+    return body.strip() if body.strip() else "(tasks.md 是空的)"
+
+
 def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: str = "main") -> str:
     proposal_path = change_dir / "proposal.md"
     text = proposal_path.read_text(encoding="utf-8")
     fm_data, body, _error = fm.load_frontmatter_data(text)
     title = fm_data.get("title", "") if isinstance(fm_data, dict) else ""
+
+    tasks_section = _read_tasks_section(change_dir / "tasks.md")
 
     specs_dir = spec_root / "specs"
     analysis = diff_analyzer.analyze(specs_dir, base_ref)
@@ -69,9 +93,10 @@ def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: st
         change_id=change_id,
         proposal_title=title,
         proposal_body=body.strip(),
+        tasks_section=tasks_section,
         blast_radius_summary=analysis["summary"],
         base_ref=base_ref,
-        diff=diff if diff.strip() else "(specs/ 無變更——如果這不符合預期，檢查一下 --base 是否指對分支）",
+        diff=diff if diff.strip() else "(specs/ 無變更——如果這不符合預期，檢查一下 --base 是否指對分支)",
     )
 
 
