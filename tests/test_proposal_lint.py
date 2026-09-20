@@ -127,3 +127,88 @@ def test_no_frontmatter_fails():
     result = proposal_lint.lint_text(NO_FRONTMATTER)
     assert not result.ok
     assert any("frontmatter" in e for e in result.errors)
+
+
+BUGFIX_OK = """\
+---
+id: PROP-0006
+title: "驗證邊界漏判"
+impact_surface:
+  - x
+type: bugfix
+---
+
+## 壞在哪 (Symptom)
+
+輸入剛好 100 字元時驗證沒擋下來。
+
+## 怎麼修 (Fix)
+
+邊界判斷用 > 改成 >=。
+"""
+
+HOTFIX_OK = """\
+---
+id: PROP-0007
+title: "資料庫連線池爆掉"
+impact_surface:
+  - x
+type: hotfix
+---
+
+## 症狀 (Symptom)
+
+連線數衝到上限，API 全部逾時。
+"""
+
+BUGFIX_TOO_LONG = (
+    """\
+---
+id: PROP-0008
+title: "過長的 bugfix"
+impact_surface:
+  - x
+type: bugfix
+---
+
+## 壞在哪 (Symptom)
+
+"""
+    + "\n".join(f"- 第 {i} 行" for i in range(1, 20))
+)
+
+INVALID_TYPE = """\
+---
+id: PROP-0009
+title: "type 打錯字"
+impact_surface:
+  - x
+type: not_a_real_type
+---
+
+## 3. 非目標 (Non-Goals)
+
+- x
+"""
+
+
+def test_bugfix_type_uses_relaxed_rules():
+    result = proposal_lint.lint_text(BUGFIX_OK)
+    assert result.ok, result.errors  # 不要求非目標區塊，行數上限也不是 35
+
+
+def test_hotfix_type_uses_leanest_rules():
+    result = proposal_lint.lint_text(HOTFIX_OK)
+    assert result.ok, result.errors
+
+
+def test_bugfix_still_has_its_own_line_limit():
+    result = proposal_lint.lint_text(BUGFIX_TOO_LONG)
+    assert not result.ok
+    assert any("超過上限 15 行" in e for e in result.errors)
+
+
+def test_invalid_type_value_is_flagged():
+    result = proposal_lint.lint_text(INVALID_TYPE)
+    assert not result.ok
+    assert any("type 值不合法" in e for e in result.errors)
