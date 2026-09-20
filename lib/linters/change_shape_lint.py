@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ALLOWED_FILES = {"proposal.md", "tasks.md"}
+ALLOWED_HIDDEN_FILES = {".gitkeep"}  # 唯一放行的點開頭檔案；其他一律不放過（含隱藏子目錄）
 
 
 @dataclass
@@ -38,8 +39,8 @@ def lint_dir(change_dir: Path) -> LintResult:
         return result
 
     for entry in sorted(change_dir.iterdir()):
-        if entry.name.startswith("."):
-            continue  # .gitkeep 等隱藏檔不管
+        if entry.name in ALLOWED_HIDDEN_FILES and entry.is_file():
+            continue  # 只有明確列在白名單裡的點開頭「檔案」才放行，隱藏子目錄一律不放過
         if entry.is_dir():
             result.errors.append(f"不允許子目錄：{entry.name}/（changes/<id>/ 必須是平的）")
             continue

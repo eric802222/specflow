@@ -39,6 +39,12 @@ class Lifecycle:
         state = self.states.get(name, {})
         return bool(state.get("final"))
 
+    def requires_tasks(self, name: str) -> bool:
+        """這個狀態是否要求 tasks.md 存在——直接宣告在 YAML 裡，不是另外用一份
+        Python 常數維護；不然 YAML 加了新狀態，Python 那份常數不會自動知道。"""
+        state = self.states.get(name, {})
+        return bool(state.get("requires_tasks"))
+
     def transitions(self, name: str) -> list:
         """回傳某狀態底下所有合法轉移（Transition 物件的清單）。"""
         state = self.states.get(name, {})
