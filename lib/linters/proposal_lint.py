@@ -2,9 +2,9 @@
 
 驗證一份 specflow proposal 檔案是否符合契約：
   1. Frontmatter 必須包含：id, title, impact_surface
-  2. 正文有效（非空）行數不得超過 35 行
+  2. 正文有效（非空）行數不得超過該 type 的上限
   3. 嚴禁出現代碼塊標記（```），全文皆不可有
-  4. 必須存在 "## 3. 非目標 (Non-Goals)" 區塊
+  4. feature type 必須存在 "## 3. 非目標 (Non-Goals)" 區塊；bugfix/hotfix 不強制
 
 用法：
     python3 proposal_lint.py <path-to-proposal.md> [<path> ...]
@@ -25,6 +25,13 @@ MAX_BODY_LINES = 35
 REQUIRED_FRONTMATTER_KEYS = ("id", "title", "impact_surface")
 REQUIRED_SECTION = "## 3. 非目標 (Non-Goals)"
 CODE_FENCE = "```"
+
+# type 決定套用哪一組規則：feature 維持原本的五段式儀式感（新功能範圍常常不明確，
+# 需要逼自己想清楚 Non-Goals）；bugfix/hotfix 沒有那個問題（範圍就是「壞在哪」），
+# 硬套同一套模板只會逼人繞過工具直接手改檔案——這正是我們一路在堵的事。
+VALID_TYPES = ("feature", "bugfix", "hotfix")
+TYPE_MAX_LINES = {"feature": 35, "bugfix": 15, "hotfix": 10}
+TYPE_REQUIRED_SECTION = {"feature": REQUIRED_SECTION, "bugfix": None, "hotfix": None}
 
 # 對外沿用舊名稱，讓其他呼叫端（bin/specflow.py 等）不用改 import
 read_frontmatter = fm.read_frontmatter
@@ -61,17 +68,24 @@ def lint_text(text: str, path: Path = None) -> LintResult:
     elif not error:
         result.errors.append("frontmatter 必須是一個 YAML mapping")
 
+    proposal_type = (fm_data.get("type") if isinstance(fm_data, dict) else None) or "feature"
+    if proposal_type not in VALID_TYPES:
+        result.errors.append(f"type 值不合法：'{proposal_type}'（只能是 {VALID_TYPES}）")
+        proposal_type = "feature"  # 用預設規則繼續檢查其餘部分，不要因為這個就整份跳過
+
     if CODE_FENCE in text:
         result.errors.append(f"嚴禁出現代碼塊標記（{CODE_FENCE}）")
 
+    max_lines = TYPE_MAX_LINES[proposal_type]
     line_count = _effective_line_count(body)
-    if line_count > MAX_BODY_LINES:
+    if line_count > max_lines:
         result.errors.append(
-            f"正文有效非空行數為 {line_count}，超過上限 {MAX_BODY_LINES} 行"
+            f"正文有效非空行數為 {line_count}，超過上限 {max_lines} 行（type: {proposal_type}）"
         )
 
-    if REQUIRED_SECTION not in body:
-        result.errors.append(f"必須存在區塊：{REQUIRED_SECTION}")
+    required_section = TYPE_REQUIRED_SECTION[proposal_type]
+    if required_section and required_section not in body:
+        result.errors.append(f"必須存在區塊：{required_section}")
 
     return result
 
