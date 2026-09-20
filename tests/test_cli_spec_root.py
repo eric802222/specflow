@@ -120,3 +120,40 @@ def test_init_refuses_when_template_markers_missing(tmp_path, monkeypatch):
 
     assert exit_code == 1
     assert not (spec_root / "changes" / "CP-1").exists()
+
+
+def test_init_rejects_change_id_with_path_separator(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["init", "--spec-root", str(spec_root), "../evil", "標題"])
+    exit_code = args.func(args)
+
+    assert exit_code == 1
+    assert not (spec_root / "changes").exists()  # 連 changes/ 都不該被建出來
+
+
+def test_init_rejects_change_id_starting_with_dot(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["init", "--spec-root", str(spec_root), ".hidden", "標題"])
+    exit_code = args.func(args)
+
+    assert exit_code == 1
+
+
+def test_init_accepts_realistic_jira_style_change_id(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-153-discount-reason-visibility", "標題"]
+    )
+    exit_code = args.func(args)
+
+    assert exit_code == 0
+    assert (spec_root / "changes" / "CP-153-discount-reason-visibility" / "proposal.md").exists()
