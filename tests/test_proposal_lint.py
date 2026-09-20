@@ -158,7 +158,7 @@ type: hotfix
 
 ## 症狀 (Symptom)
 
-連線數衝到上限，API 全部逾時。
+連線數衝到上限，API 全部逗時。
 """
 
 BUGFIX_TOO_LONG = (
@@ -212,3 +212,49 @@ def test_invalid_type_value_is_flagged():
     result = proposal_lint.lint_text(INVALID_TYPE)
     assert not result.ok
     assert any("type 值不合法" in e for e in result.errors)
+
+
+BASELINE_OK = """\
+---
+id: PROP-0010
+title: "既有折扣核準流程現況"
+impact_surface:
+  - x
+type: baseline
+---
+
+## 現況 (What it actually does today)
+
+業務主管手動在後台核準，沒有系統輔助。
+
+## 依據 (Source of Truth)
+
+讀了 approval_controller.rb，並跟業務主管確認過。
+"""
+
+BASELINE_TOO_LONG = (
+    """\
+---
+id: PROP-0011
+title: "過長的 baseline"
+impact_surface:
+  - x
+type: baseline
+---
+
+## 現況 (What it actually does today)
+
+"""
+    + "\n".join(f"- 第 {i} 行" for i in range(1, 25))
+)
+
+
+def test_baseline_type_uses_relaxed_rules():
+    result = proposal_lint.lint_text(BASELINE_OK)
+    assert result.ok, result.errors  # 不要求非目標區塊
+
+
+def test_baseline_still_has_its_own_line_limit():
+    result = proposal_lint.lint_text(BASELINE_TOO_LONG)
+    assert not result.ok
+    assert any("超過上限 20 行" in e for e in result.errors)
