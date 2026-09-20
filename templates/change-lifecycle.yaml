@@ -7,7 +7,9 @@
 #   true  → 條件是「對應的 lint 全部通過」，工具可以主動建議、甚至代為執行
 #   false → 條件是人（或 AI）明確宣告的事件，工具不能替你決定「問題找到了」或「開發完成了」
 #
-# 每個狀態的 `requires_tasks` 欄位：這個狀態是否要求 tasks.md 存在。
+# `requires_type`（可選）：這個轉移只有 proposal.md 的 type 欄位符合才合法。
+# 目前只有 HOTFIX_LIVE 用到——緊急變更繞過正常審核直接上線，但這件事本身
+# 必須誠實標記 type: hotfix 才能觸發，不能隨便找個捷徑抄。
 
 id: change_lifecycle
 initial: draft
@@ -20,6 +22,10 @@ states:
       LINT_PASS:
         target: delivered
         auto: true
+      HOTFIX_LIVE:
+        target: live_pending_review
+        auto: false
+        requires_type: hotfix
 
   delivered:
     description: 已交付（給 RD 或等待實作），proposal/tasks 均合法
@@ -45,6 +51,17 @@ states:
     requires_tasks: true
     "on":
       MERGED:
+        target: applied
+        auto: false
+
+  live_pending_review:
+    description: >-
+      緊急變更已經上線，事後審查（Post-Implementation Review）尚未補交。
+      仿 ITIL Emergency Change：跳過事前審核換取速度，但事後一定要補一份
+      記錄，不會因為「火滅了」就不了了之。
+    requires_tasks: true
+    "on":
+      POSTREVIEW_DONE:
         target: applied
         auto: false
 
