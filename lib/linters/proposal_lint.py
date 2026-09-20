@@ -4,7 +4,7 @@
   1. Frontmatter 必須包含：id, title, impact_surface
   2. 正文有效（非空）行數不得超過該 type 的上限
   3. 嚴禁出現代碼塊標記（```），全文皆不可有
-  4. feature type 必須存在 "## 3. 非目標 (Non-Goals)" 區塊；bugfix/hotfix 不強制
+  4. feature type 必須存在 "## 3. 非目標 (Non-Goals)" 區塊；bugfix/hotfix/baseline 不強制
 
 用法：
     python3 proposal_lint.py <path-to-proposal.md> [<path> ...]
@@ -28,10 +28,18 @@ CODE_FENCE = "```"
 
 # type 決定套用哪一組規則：feature 維持原本的五段式儀式感（新功能範圍常常不明確，
 # 需要逼自己想清楚 Non-Goals）；bugfix/hotfix 沒有那個問題（範圍就是「壞在哪」），
-# 硬套同一套模板只會逼人繞過工具直接手改檔案——這正是我們一路在堵的事。
-VALID_TYPES = ("feature", "bugfix", "hotfix")
-TYPE_MAX_LINES = {"feature": 35, "bugfix": 15, "hotfix": 10}
-TYPE_REQUIRED_SECTION = {"feature": REQUIRED_SECTION, "bugfix": None, "hotfix": None}
+# 硬套同一套模板只會逼人繞過工具直接手改檔案——這正是我們一路在堵的事。baseline
+# 又是另一種情況：描述既有系統現況，不是提議變更，套用 feature 的 Why/Goals 會
+# 逼人硬編一個不存在的「動機」出來——接手一個沒有規格的既有專案時，這種摩擦力
+# 會直接勸退人使用這個工具。
+VALID_TYPES = ("feature", "bugfix", "hotfix", "baseline")
+TYPE_MAX_LINES = {"feature": 35, "bugfix": 15, "hotfix": 10, "baseline": 20}
+TYPE_REQUIRED_SECTION = {
+    "feature": REQUIRED_SECTION,
+    "bugfix": None,
+    "hotfix": None,
+    "baseline": None,
+}
 
 # 對外沿用舊名稱，讓其他呼叫端（bin/specflow.py 等）不用改 import
 read_frontmatter = fm.read_frontmatter
