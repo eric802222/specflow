@@ -54,11 +54,12 @@ pip install -r requirements.txt
 ## `--spec-root`：指向任何一個目標專案
 
 specflow 本身（這支 CLI、範本、linter 規則、狀態機定義）跟它管理的「目標專案」是分開的。
-目標專案的 `.spec/` 資料夾可以在任何 repo 裡，解析順序：
+目標專案的 spec root 可以在任何 repo 裡，解析順序：
 
 1. `--spec-root <path>` 明確指定
 2. 環境變數 `SPECFLOW_SPEC_ROOT`
-3. 從目前目錄往上找 `.spec/`（跟 git 找 `.git` 同樣的邏輯）
+3. 目前目錄底下的 `.spec/`（規格嵌在應用程式 repo 裡的 monorepo 模式）
+4. 目前目錄本身（規格自己獨立一個 repo，repo root 就是 spec root——不用另外建 `.spec/` 包一層）
 
 ```
 specflow root --spec-root /path/to/some-project/.spec   # 除錯用，印出目前解析到的位置
@@ -138,13 +139,14 @@ specflow/
 │   └── workflow/
 │       ├── lifecycle.py          解析 change-lifecycle.yaml
 │       └── next_action.py        算出「下一步該做什麼」的結構化契約
-└── tests/                        單元測試（34 個，涵蓋全部 linter + 端到端生命週期）
+└── tests/                        單元測試（41 個，涵蓋全部 linter + CLI 路徑解析 + 端到端生命週期）
 ```
 
 ## 現況與待補
 
 **已完成**：proposal/tasks 範本、四種 linter（proposal/task/change_shape/cross_spec）、
-change 生命週期狀態機、`specflow` CLI（可獨立安裝、跟目標 repo 解耦）、單元測試。
+change 生命週期狀態機、`specflow` CLI（可獨立安裝、跟目標 repo 解耦，支援 monorepo 與獨立
+spec repo 兩種模式）、單元測試。
 
 **待補**：
 - `diff_analyzer`／`prompt_gen` 尚未接進 CLI 子命令，也還沒整合 `next_action` 的狀態資訊。
