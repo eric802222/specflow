@@ -24,6 +24,7 @@ class Transition:
     target: str
     auto: bool
     requires_type: str = None
+    skip_target_check: bool = False
 
 
 class Lifecycle:
@@ -46,6 +47,14 @@ class Lifecycle:
         state = self.states.get(name, {})
         return bool(state.get("requires_tasks"))
 
+    def allows(self, name: str, capability: str) -> bool:
+        """這個狀態是否允許某個 command capability（例如 generate_delivery）。
+        capability 清單直接宣告在 YAML 的 `allows:` 底下，CLI 指令查這裡決定能不能跑，
+        不要自己 hard-code「delivered 才能產生交付內容」這種規則散在程式碼各處——
+        不然 lifecycle 定義的規則跟 CLI 自己認定的規則會漸漸分岔。"""
+        state = self.states.get(name, {})
+        return capability in (state.get("allows") or [])
+
     def transitions(self, name: str) -> list:
         """回傳某狀態底下所有合法轉移（Transition 物件的清單），不篩選 requires_type。"""
         state = self.states.get(name, {})
@@ -61,6 +70,7 @@ class Lifecycle:
                         target=spec.get("target"),
                         auto=bool(spec.get("auto")),
                         requires_type=spec.get("requires_type"),
+                        skip_target_check=bool(spec.get("skip_target_check")),
                     )
                 )
             else:
