@@ -122,3 +122,25 @@ def test_allows_defaults_false_for_unknown_state_or_capability():
     lc = lifecycle_mod.load_lifecycle()
     assert lc.allows("not_a_real_state", "generate_delivery") is False
     assert lc.allows("delivered", "not_a_real_capability") is False
+
+
+def test_baseline_captured_goes_to_dedicated_terminal_state():
+    """baseline type 有自己專屬的終點狀態，不跟 applied 共用——applied 的
+    requires_tasks=true 是為了留下開發痕跡設計的，baseline 純粹描述現況，
+    永遠不會有 tasks.md，套用 applied 語意會讓它永久卡在「未完成」。"""
+    lc = lifecycle_mod.load_lifecycle()
+    t = lc.find_transition("draft", "BASELINE_CAPTURED")
+    assert t is not None
+    assert t.requires_type == "baseline"
+    assert t.target == "baseline_recorded"
+    assert lc.is_final("baseline_recorded") is True
+    assert lc.requires_tasks("baseline_recorded") is False
+
+
+def test_baseline_captured_available_only_for_baseline_type():
+    lc = lifecycle_mod.load_lifecycle()
+    available_feature = lc.available_transitions("draft", "feature")
+    assert "BASELINE_CAPTURED" not in [t.event for t in available_feature]
+
+    available_baseline = lc.available_transitions("draft", "baseline")
+    assert "BASELINE_CAPTURED" in [t.event for t in available_baseline]
