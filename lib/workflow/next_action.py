@@ -23,8 +23,9 @@ from lib.workflow import lifecycle as lifecycle_mod  # noqa: E402
 def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
     """跑完白名單 → proposal_lint → status 合法性 → （視狀態需要）task_lint。
 
-    回傳的 dict 一定有 change_id / status / lifecycle / ok / next_action /
-    blocking_errors 這幾個 key。ok=False 時 next_action 是失敗原因的代號
+    回傳的 dict 一定有 change_id / status / type / lifecycle / ok / next_action /
+    blocking_errors 這幾個 key（type 要在 proposal_lint 過關後才讀得到，失敗在
+    白名單那關的話沒有 type key）。ok=False 時 next_action 是失敗原因的代號
     （fix_change_shape / fix_proposal_lint / fix_proposal_status /
     write_tasks_md / fix_task_lint），呼叫端可以直接用來擋下操作或印訊息。
     """
@@ -46,11 +47,13 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
     p_result = proposal_lint.lint_file(proposal_path)
     fm = proposal_lint.read_frontmatter(proposal_path)
     status = (fm.get("status") if isinstance(fm, dict) else None) or lc.initial
+    proposal_type = (fm.get("type") if isinstance(fm, dict) else None) or "feature"
 
     if not p_result.ok:
         return {
             "change_id": change_id,
             "status": status,
+            "type": proposal_type,
             "lifecycle": lc,
             "ok": False,
             "next_action": "fix_proposal_lint",
@@ -61,6 +64,7 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
         return {
             "change_id": change_id,
             "status": status,
+            "type": proposal_type,
             "lifecycle": lc,
             "ok": False,
             "next_action": "fix_proposal_status",
@@ -73,6 +77,7 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
             return {
                 "change_id": change_id,
                 "status": status,
+                "type": proposal_type,
                 "lifecycle": lc,
                 "ok": False,
                 "next_action": "write_tasks_md",
@@ -84,6 +89,7 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
             return {
                 "change_id": change_id,
                 "status": status,
+                "type": proposal_type,
                 "lifecycle": lc,
                 "ok": False,
                 "next_action": "fix_task_lint",
@@ -93,6 +99,7 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
     return {
         "change_id": change_id,
         "status": status,
+        "type": proposal_type,
         "lifecycle": lc,
         "ok": True,
         "next_action": None,
@@ -114,6 +121,7 @@ def compute_next(change_dir: Path, lifecycle_path: Path = None) -> dict:
     lc = gate["lifecycle"]
     status = gate["status"]
     change_id = gate["change_id"]
+    proposal_type = gate["type"]
 
     if lc.is_final(status):
         return {
@@ -124,10 +132,16 @@ def compute_next(change_dir: Path, lifecycle_path: Path = None) -> dict:
             "message": "已是終點狀態，流程結束",
         }
 
-    auto = lc.auto_transitions(status)
+    # 只考慮這個 proposal 的 type 有資格使用的轉移（例如 HOTFIX_LIVE 只有
+    # type: hotfix 才看得到）——不這樣篩選的話，一般 feature 類型的 change
+    # 會在 available_events 裡看到不該屬於它的緊急事件。
+    available = lc.available_transitions(status, proposal_type)
+    auto = [t for t in available if t.auto]
+    manual = [t for t in available if not t.auto]
+
     if auto:
         t = auto[0]
-        return {
+        result = {
             "change_id": change_id,
             "status": status,
             "next_action": "transition",
@@ -135,8 +149,13 @@ def compute_next(change_dir: Path, lifecycle_path: Path = None) -> dict:
             "target_status": t.target,
             "blocking_errors": [],
         }
+        # 即使有自動轉移可用，也不能把其他手動事件（例如緊急通道 HOTFIX_LIVE）
+        # 悄悄藏起來——不然 AI/人只會看到「該走的正常流程」，永遠不知道還有
+        # 別的合法選項存在。
+        if manual:
+            result["other_events"] = [m.event for m in manual]
+        return result
 
-    manual = lc.manual_transitions(status)
     return {
         "change_id": change_id,
         "status": status,
