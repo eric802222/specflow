@@ -12,7 +12,7 @@ Everything-as-Code 全端規格編譯與 AI 交付管線工具。
 1. **Everything-as-Code (SSOT)**：架構、契約與邏輯全面代碼化、版本控管化。
 2. **規格即骨架（Spec-Executable）**：DSL 必須可 Lint、可編譯出產物、可當測試斷言。
 3. **提案槽位限縮（Slot-Filling Schema）**：Proposal 用 Frontmatter Markdown，Linter 硬性限制行數與結構。
-4. **差量交付（Diff-Driven AI Delivery）**：規格異動發生在對應的 change branch 上，MR 的 diff 即交付給 AI 的 Prompt。
+4. **差量交付（Diff-Driven AI Delivery）**：規格異動發生在對應的 change branch 上，`specflow prompt` 直接把 diff 組成交付內容，不另外維護交付文件。
 5. **人跟 AI 走同一條窄路**：每種文件都有硬性結構上限、白名單擋住多餘檔案、下一步永遠由工具算出來（`specflow next`），不是靠 AI 自由判斷。
 
 ## `.spec/` 目錄約定（目標專案裡的樣子）
@@ -79,6 +79,9 @@ specflow next CP-153-discount-reason
 
 # 套用一次合法的狀態轉移
 specflow transition CP-153-discount-reason LINT_PASS
+
+# 開發階段：給一個 change-id，直接印出交付給 AI 的完整內容（純輸出，不落地成檔案）
+specflow prompt CP-153-discount-reason --base main
 ```
 
 ## change 生命週期（`templates/change-lifecycle.yaml`）
@@ -89,8 +92,21 @@ draft --(LINT_PASS, 自動)--> delivered --(ISSUE_FOUND, 人工)--> respec --(LI
 ```
 
 `specflow next` 讀這張狀態機 + 跑對應 linter，回傳「下一步合法動作是什麼、被什麼錯誤擋住」；
-`specflow transition` 套用一次轉移，`auto` 轉移在套用前會重新驗證一次 lint，避免繞過 `next`
-直接跳過檢查。
+`specflow transition` 套用一次轉移——**不管 auto 還是手動事件，都會先整組跑一次 gate_check**，
+不能只挑 auto 事件才重驗（這是修過的真實漏洞：手動事件曾經完全沒被驗證，等於 `next` 擋得住
+的東西，直接呼叫 `transition` 卻能全部繞過去）。`<spec-root>/change-lifecycle.yaml` 存在的話
+會優先採用，讓不同專案客製化自己的流程。
+
+## `specflow prompt`：給 change-id，換交付內容
+
+```
+specflow prompt <change-id> [--base main]
+```
+
+跑 gate_check 確認這個 change 合法之後，組出一份完整內容印到 stdout：Proposal 的 Why/Goals
+摘要、Blast Radius 統計、`specs/` 相對於 `--base` 分支的完整 git diff、交付要求。**刻意不寫
+成任何新檔案**——寫進 `changes/<id>/` 會直接被 `change_shape_lint` 的白名單擋下（那條線是
+刻意畫的：change 資料夾只能有 `proposal.md`、`tasks.md`）。RD 自己複製貼上或接到別的工具。
 
 ## Proposal 規則（`lib/linters/proposal_lint.py`）
 
@@ -106,8 +122,8 @@ kebab-case、不允許巢狀子項目、禁代碼塊、task 數量上限 15 個�
 
 ## change 資料夾白名單（`lib/linters/change_shape_lint.py`）
 
-`changes/<id>/` 底下只允許 `proposal.md`、`tasks.md` 兩個檔案存在，出現任何第三個檔案
-（不管內容多好，包含 AI 自己覺得有幫助而多寫的說明文件）一律判定失敗。
+`changes/<id>/` 底下只允許 `proposal.md`、`tasks.md` 兩個檔案，加上 `.gitkeep`（唯一放行的
+點開頭檔案）。出現任何第三個檔案或任何隱藏子目錄，一律判定失敗——不審查內容，只審查資格。
 
 ## 跨規格一致性檢查（`lib/linters/cross_spec_lint.py`）
 
@@ -120,7 +136,7 @@ TypeSpec enum 用 `PascalCase(entity_key) + "Status"`。找不到對應來源時
 
 ```
 specflow/
-├── bin/specflow.py              CLI 入口（init / lint / next / transition / root）
+├── bin/specflow.py              CLI 入口（init / lint / next / transition / prompt / root）
 ├── pyproject.toml                pip install -e . 的 packaging 設定
 ├── templates/                    規格範本
 │   ├── proposal.template.md
@@ -129,27 +145,33 @@ specflow/
 │   ├── rules.template.yaml
 │   └── change-lifecycle.yaml     change 自己的狀態機定義
 ├── lib/
+│   ├── common/
+│   │   ├── frontmatter.py        共用的 frontmatter 解析/寫入（單行替換，不重新序列化整份）
+│   │   └── atomic_write.py       原子寫入（暫存檔 + os.replace()）
 │   ├── linters/
 │   │   ├── proposal_lint.py      Proposal 格式檢查
 │   │   ├── task_lint.py          tasks.md 結構檢查
 │   │   ├── change_shape_lint.py  change 資料夾白名單
 │   │   └── cross_spec_lint.py    跨規格一致性檢查（db/api/ui/logic ↔ glossary）
 │   ├── analyzers/diff_analyzer.py   影響範圍（Blast Radius）統計
-│   ├── generators/prompt_gen.py     Diff 即 Prompt 生成器
+│   ├── generators/prompt_gen.py     給 change-id 組出交付 Prompt
 │   └── workflow/
 │       ├── lifecycle.py          解析 change-lifecycle.yaml
-│       └── next_action.py        算出「下一步該做什麼」的結構化契約
-└── tests/                        單元測試（41 個，涵蓋全部 linter + CLI 路徑解析 + 端到端生命週期）
+│       └── next_action.py        gate_check + 算出「下一步該做什麼」
+└── tests/                        單元測試（70 個，涵蓋全部 linter + CLI 路徑解析 + 端到端生命週期）
 ```
 
 ## 現況與待補
 
 **已完成**：proposal/tasks 範本、四種 linter（proposal/task/change_shape/cross_spec）、
-change 生命週期狀態機、`specflow` CLI（可獨立安裝、跟目標 repo 解耦，支援 monorepo 與獨立
-spec repo 兩種模式）、單元測試。
+change 生命週期狀態機（`gate_check` 統一把關，next/transition/prompt 共用同一份檢查邏輯）、
+`specflow` CLI（可獨立安裝、跟目標 repo 解耦，支援 monorepo 與獨立 spec repo 兩種模式）、
+`specflow prompt` 給 change-id 直接換交付內容（不落地成檔案）、原子寫入、單元測試。
 
 **待補**：
-- `diff_analyzer`／`prompt_gen` 尚未接進 CLI 子命令，也還沒整合 `next_action` 的狀態資訊。
 - `cross_spec_lint` 的命名慣例是寫死的，不符合的專案會被判定「略過」而非報錯，之後可以加
   一份可選的 `.spec/cross_spec_map.yaml` 讓專案明確宣告對照關係。
+- `proposal.md` 跟 `tasks.md` 沒有語意層面的一致性檢查（例如 task 的 `touches` 是否仍落在
+  `impact_surface` 宣告範圍內）——這是 spec-kit 自己也還沒解決的「衍生文件跟權威文件漂移」
+  問題，需要另開一輪設計討論。
 - CI 範例（pre-commit / MR pipeline 呼叫 `specflow lint` + `cross_spec_lint`）還沒寫。
