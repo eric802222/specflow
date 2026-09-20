@@ -211,6 +211,23 @@ def cmd_transition(args: argparse.Namespace) -> int:
         return 1
 
     target = t.target
+
+    # 轉移前先確認「轉移完成後」的狀態本身合法，不是只確認轉移前合法——曾經
+    # 真的有過漏洞：draft 沒有 tasks.md 卻能合法轉移到要求 tasks.md 的 delivered，
+    # 送進去之後這個 change 立刻違反自身 invariant，而且連修正用的轉移事件都
+    # 會被 gate_check 擋住，等於卡死。唯一的例外是標記 skip_target_check 的轉移
+    # （目前只有 HOTFIX_LIVE）——它的存在意義就是「先進入、事後才補前提」。
+    if not t.skip_target_check:
+        ok, action, errors = next_action.check_state_prerequisites(change_dir, lc, target)
+        if not ok:
+            print(
+                f"擋下轉移：完成後的狀態 '{target}' 不符合前提條件（{action}）",
+                file=sys.stderr,
+            )
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
+            return 1
+
     proposal_path = change_dir / "proposal.md"
     proposal_lint.write_frontmatter_field(proposal_path, "status", target)
     print(f"{change_id}: {current_status} --{args.event}--> {target}")
@@ -228,7 +245,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     """給一個 change-id，印出可以直接交給 AI 的交付內容——純輸出，不落地成任何檔案。
 
     RD 要拿到「交付指令跟資料」，跑這個指令就好；輸出裡已經包含 proposal 摘要、
-    Blast Radius 統計、specs/ 的完整 diff，不需要再另外維護一份交付文件。
+    tasks.md、Blast Radius 統計、specs/ 的完整 diff，不需要再另外維護一份交付文件。
     """
     spec_root = resolve_spec_root(args.spec_root)
     change_dir = resolve_change_dir(spec_root, args.change)
@@ -239,6 +256,15 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         print(f"無法產生交付內容：change 目前未通過檢查（{gate['next_action']}）", file=sys.stderr)
         for err in gate["blocking_errors"]:
             print(f"  - {err}", file=sys.stderr)
+        return 1
+
+    lc = gate["lifecycle"]
+    if not lc.allows(gate["status"], "generate_delivery"):
+        print(
+            f"無法產生交付內容：狀態 '{gate['status']}' 不允許 generate_delivery"
+            "（這個狀態還不是可交付狀態，或已經超過交付階段）",
+            file=sys.stderr,
+        )
         return 1
 
     try:
