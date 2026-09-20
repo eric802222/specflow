@@ -132,11 +132,14 @@ def test_logic_mismatch_detected(tmp_path):
     assert any("aproved" in e and "[logic]" in e for e in result.errors)
 
 
-def test_unknown_entity_fails(tmp_path):
+def test_unknown_entity_skipped_not_an_error(tmp_path):
+    """回歸測試：接手一個還沒有規格的既有專案時，大多數實體本來就還沒被
+    glossary.yaml 記錄，這不該讓 lint 報錯——只有「已經記錄、但記錄彼此
+    矛盾」才算錯誤。「還沒治理」是資料，不是缺陷。"""
     glossary_path, spec_root = _write_spec(tmp_path)
     result = csl.lint_entity(glossary_path, "not_an_entity", spec_root)
-    assert not result.ok
-    assert any("未定義實體" in e for e in result.errors)
+    assert result.ok, result.errors
+    assert all(not c.checked for c in result.checks)
 
 
 def test_missing_layers_are_skipped_not_errors(tmp_path):
