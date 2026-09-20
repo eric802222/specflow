@@ -66,3 +66,33 @@ states:
     assert lc.id == "minimal"
     assert lc.is_final("only") is True
     assert lc.has_state("draft") is False  # 不是預設那五個狀態了
+
+
+def test_hotfix_live_requires_matching_type():
+    lc = lifecycle_mod.load_lifecycle()
+    t = lc.find_transition("draft", "HOTFIX_LIVE")
+    assert t is not None
+    assert t.requires_type == "hotfix"
+
+
+def test_available_transitions_filters_out_wrong_type():
+    lc = lifecycle_mod.load_lifecycle()
+
+    available_feature = lc.available_transitions("draft", "feature")
+    assert "HOTFIX_LIVE" not in [t.event for t in available_feature]
+
+    available_hotfix = lc.available_transitions("draft", "hotfix")
+    assert "HOTFIX_LIVE" in [t.event for t in available_hotfix]
+    assert "LINT_PASS" in [t.event for t in available_hotfix]  # 沒限制 type 的轉移永遠可見
+
+
+def test_find_transition_returns_none_for_unknown_event():
+    lc = lifecycle_mod.load_lifecycle()
+    assert lc.find_transition("draft", "NOT_A_REAL_EVENT") is None
+
+
+def test_live_pending_review_requires_tasks_and_leads_to_applied():
+    lc = lifecycle_mod.load_lifecycle()
+    assert lc.requires_tasks("live_pending_review") is True
+    t = lc.find_transition("live_pending_review", "POSTREVIEW_DONE")
+    assert t.target == "applied"
