@@ -1,0 +1,47 @@
+# change-lifecycle.yaml — specflow 自身流程的狀態機定義
+#
+# 跟 .spec/logic/lifecycle.yaml（業務實體的狀態機）用同一套語法，
+# 差別只在於這裡描述的是「一個 change 本身」的生命週期，不是業務實體。
+#
+# 每個轉移的 `auto` 欄位：
+#   true  → 條件是「對應的 lint 全部通過」，工具可以主動建議、甚至代為執行
+#   false → 條件是人（或 AI）明確宣告的事件，工具不能替你決定「問題找到了」或「開發完成了」
+
+id: change_lifecycle
+initial: draft
+
+states:
+  draft:
+    description: 起草中，proposal.md 尚未通過審查
+    "on":
+      LINT_PASS:
+        target: delivered
+        auto: true
+
+  delivered:
+    description: 已交付（給 RD 或等待實作），proposal/tasks 均合法
+    "on":
+      ISSUE_FOUND:
+        target: respec
+        auto: false
+      DEV_DONE:
+        target: ready
+        auto: false
+
+  respec:
+    description: 實作中發現規格需要調整，正在修正
+    "on":
+      LINT_PASS:
+        target: delivered
+        auto: true
+
+  ready:
+    description: 開發完成，等待 MR 審查通過並 merge
+    "on":
+      MERGED:
+        target: applied
+        auto: false
+
+  applied:
+    description: 已併入 specs/ 並封存，流程終點
+    final: true

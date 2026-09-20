@@ -98,6 +98,34 @@ def lint_file(path: Path) -> LintResult:
     return lint_text(text, path=path)
 
 
+def read_frontmatter(path: Path) -> dict:
+    """讀出一份 proposal.md（或同樣有 --- frontmatter 的檔案）的 frontmatter，解析失敗回傳 {}。"""
+    text = path.read_text(encoding="utf-8")
+    fm_text, _ = _split_frontmatter(text)
+    if fm_text is None or yaml is None:
+        return {}
+    try:
+        return yaml.safe_load(fm_text) or {}
+    except yaml.YAMLError:
+        return {}
+
+
+def write_frontmatter_field(path: Path, key: str, value) -> None:
+    """就地更新 frontmatter 裡的一個欄位，正文原封不動。"""
+    if yaml is None:
+        raise RuntimeError("需要 pyyaml 才能寫入 frontmatter")
+
+    text = path.read_text(encoding="utf-8")
+    fm_text, body = _split_frontmatter(text)
+    if fm_text is None:
+        raise ValueError(f"{path} 找不到 frontmatter 區塊")
+
+    data = yaml.safe_load(fm_text) or {}
+    data[key] = value
+    new_fm = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    path.write_text(f"---\n{new_fm}---{body}", encoding="utf-8")
+
+
 def main(argv=None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     if not argv:

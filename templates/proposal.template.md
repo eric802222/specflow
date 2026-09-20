@@ -4,6 +4,9 @@ title: "<一句話描述本次變更>"
 impact_surface:
   - .spec/db/schema.dbml
   - .spec/api/main.tsp
+status: draft
+refs:
+  - JIRA-XXXX
 ---
 
 ## 1. 為什麼 (Why)
