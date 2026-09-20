@@ -16,7 +16,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
-    specflow init <change-id> <title>          在 <spec-root>/changes/<change-id>/ 建立 proposal.md
+    specflow init <change-id> <title> [--type feature|bugfix|hotfix]  建立 proposal.md
     specflow lint [paths]                       對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
@@ -41,11 +41,15 @@ from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.generators import prompt_gen  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
 
-TEMPLATE_PATH = REPO_ROOT / "templates" / "proposal.template.md"
+TEMPLATE_PATHS = {
+    "feature": REPO_ROOT / "templates" / "proposal.template.md",
+    "bugfix": REPO_ROOT / "templates" / "proposal-bugfix.template.md",
+    "hotfix": REPO_ROOT / "templates" / "proposal-hotfix.template.md",
+}
 ENV_VAR = "SPECFLOW_SPEC_ROOT"
 
 ID_MARKER = "id: PROP-XXXX"
-TITLE_MARKER = 'title: "<一句話描述本次變更>"'
+TITLE_MARKER = 'title: "<一句話描述>"'
 
 # change_id 直接被拼進路徑（spec_root / "changes" / change_id），所以必須限制字元集：
 # 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、".."、"-foo" 這類會讓人誤讀的開頭）。
@@ -108,6 +112,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     spec_root = resolve_spec_root(args.spec_root)
     change_id = args.change_id
     title = args.title
+    change_type = args.type
 
     if not CHANGE_ID_RE.match(change_id):
         print(
@@ -117,8 +122,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         )
         return 1
 
-    if not TEMPLATE_PATH.exists():
-        print(f"找不到範本：{TEMPLATE_PATH}", file=sys.stderr)
+    template_path = TEMPLATE_PATHS[change_type]
+    if not template_path.exists():
+        print(f"找不到範本：{template_path}", file=sys.stderr)
         return 1
 
     change_dir = spec_root / "changes" / change_id
@@ -126,11 +132,11 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"change 已存在，不覆寫：{change_dir}", file=sys.stderr)
         return 1
 
-    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    text = template_path.read_text(encoding="utf-8")
     if ID_MARKER not in text or TITLE_MARKER not in text:
         print(
             f"範本格式跟預期不符，找不到佔位標記（{ID_MARKER!r} / {TITLE_MARKER!r}），"
-            f"請檢查 {TEMPLATE_PATH} 是否被改動過",
+            f"請檢查 {template_path} 是否被改動過",
             file=sys.stderr,
         )
         return 1
@@ -140,7 +146,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     change_dir.mkdir(parents=True)
     atomic_write_text(change_dir / "proposal.md", text)
-    print(f"已建立 change：{change_dir}")
+    print(f"已建立 change：{change_dir}（type: {change_type}）")
     return 0
 
 
@@ -185,16 +191,26 @@ def cmd_transition(args: argparse.Namespace) -> int:
 
     lc = gate["lifecycle"]
     current_status = gate["status"]
+    proposal_type = gate["type"]
 
-    target = lc.target_for(current_status, args.event)
-    if target is None:
-        legal = [t.event for t in lc.transitions(current_status)]
+    t = lc.find_transition(current_status, args.event)
+    if t is None:
+        legal = [tt.event for tt in lc.transitions(current_status)]
         print(
             f"非法轉移：狀態 '{current_status}' 不接受事件 '{args.event}'（合法事件：{legal}）",
             file=sys.stderr,
         )
         return 1
 
+    if t.requires_type and t.requires_type != proposal_type:
+        print(
+            f"非法轉移：事件 '{args.event}' 只允許 type: {t.requires_type} 的 change 使用"
+            f"（這個 change 的 type 是 '{proposal_type}'）",
+            file=sys.stderr,
+        )
+        return 1
+
+    target = t.target
     proposal_path = change_dir / "proposal.md"
     proposal_lint.write_frontmatter_field(proposal_path, "status", target)
     print(f"{change_id}: {current_status} --{args.event}--> {target}")
@@ -252,6 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_spec_root_arg(init_parser)
     init_parser.add_argument("change_id", help="change 的唯一識別碼，同時是資料夾名稱，例如 CP-153-discount-reason")
     init_parser.add_argument("title", help="Proposal 標題")
+    init_parser.add_argument(
+        "--type",
+        choices=["feature", "bugfix", "hotfix"],
+        default="feature",
+        help="決定套用哪一份範本、哪一組 proposal_lint 規則（預設: feature）",
+    )
     init_parser.set_defaults(func=cmd_init)
 
     lint_parser = subparsers.add_parser("lint", help="對 Proposal 檔案執行 lint")
