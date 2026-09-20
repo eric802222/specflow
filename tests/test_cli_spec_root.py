@@ -109,7 +109,7 @@ def test_init_refuses_when_template_markers_missing(tmp_path, monkeypatch):
     假 id/title 的 proposal 卻回報成功。現在要能主動擋下這種情況。"""
     broken_template = tmp_path / "broken.template.md"
     broken_template.write_text("這份範本已經被改到沒有任何佔位標記了\n", encoding="utf-8")
-    monkeypatch.setattr(cli, "TEMPLATE_PATH", broken_template)
+    monkeypatch.setitem(cli.TEMPLATE_PATHS, "feature", broken_template)
 
     spec_root = tmp_path / ".spec"
     spec_root.mkdir()
@@ -157,3 +157,65 @@ def test_init_accepts_realistic_jira_style_change_id(tmp_path):
 
     assert exit_code == 0
     assert (spec_root / "changes" / "CP-153-discount-reason-visibility" / "proposal.md").exists()
+
+
+def test_init_with_baseline_type_uses_lean_template(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-3", "既有核準流程現況", "--type", "baseline"]
+    )
+    exit_code = args.func(args)
+
+    text = (spec_root / "changes" / "CP-3" / "proposal.md").read_text(encoding="utf-8")
+    assert exit_code == 0
+    assert "type: baseline" in text
+    assert "## 現況 (What it actually does today)" in text
+    assert "## 1. 為什麼 (Why)" not in text  # 不該混到 feature 範本的區塊
+
+
+def test_init_defaults_to_feature_type(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["init", "--spec-root", str(spec_root), "CP-1", "標題"])
+    args.func(args)
+
+    text = (spec_root / "changes" / "CP-1" / "proposal.md").read_text(encoding="utf-8")
+    assert "type: feature" in text
+
+
+def test_init_with_hotfix_type_uses_lean_template(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-1", "資料庫連線爆掉緊急處置", "--type", "hotfix"]
+    )
+    exit_code = args.func(args)
+
+    text = (spec_root / "changes" / "CP-1" / "proposal.md").read_text(encoding="utf-8")
+    assert exit_code == 0
+    assert "type: hotfix" in text
+    assert "## 症狀 (Symptom)" in text
+    assert "## 1. 為什麼 (Why)" not in text  # 不該混到 feature 範本的區塊
+
+
+def test_init_with_bugfix_type_uses_lean_template(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-2", "驗證邊界漏判", "--type", "bugfix"]
+    )
+    exit_code = args.func(args)
+
+    text = (spec_root / "changes" / "CP-2" / "proposal.md").read_text(encoding="utf-8")
+    assert exit_code == 0
+    assert "type: bugfix" in text
+    assert "## 壞在哪 (Symptom)" in text
