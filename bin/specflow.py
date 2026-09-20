@@ -2,12 +2,13 @@
 """specflow CLI 入口。
 
 specflow 本身（這支 CLI、它的範本、它的 linter 規則）跟它管理的「目標專案」是兩回事：
-targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自己綁在一起，也不需要
-在同一個目錄下執行。目標位置的解析順序：
+targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自己綁在一起。目標位置的
+解析順序：
 
     1. --spec-root <path>              明確指定
     2. 環境變數 SPECFLOW_SPEC_ROOT
-    3. 從目前目錄往上找 .spec/（跟 git 找 .git 同樣的邏輯）
+    3. 目前目錄底下的 .spec/（規格嵌在應用程式 repo 裡的 monorepo 模式）
+    4. 目前目錄本身（規格自己獨立一個 repo，repo root 就是 spec root）
 
 範本（templates/）、狀態機定義（change-lifecycle.yaml）則永遠跟著 specflow 自己的安裝
 位置走，不受 --spec-root 影響——那是「工具的規則」，不是「某個專案的資料」。
@@ -39,7 +40,13 @@ ENV_VAR = "SPECFLOW_SPEC_ROOT"
 
 
 def resolve_spec_root(explicit: str = None) -> Path:
-    """算出目標專案的 .spec/ 路徑，找不到就直接中止並說明怎麼指定。"""
+    """算出目標專案的 spec root。
+
+    優先序：--spec-root > SPECFLOW_SPEC_ROOT 環境變數 > 目前目錄底下的 .spec/
+    （monorepo 模式）> 目前目錄本身（獨立 spec repo 模式）。最後一層一定成功，
+    不會因為找不到而報錯——目錄選錯了會在後續指令操作時給出更具體的錯誤
+    （例如「changes/ 底下沒有 proposal.md」），比在這裡就攔下來更有幫助。
+    """
     if explicit:
         p = Path(explicit).expanduser().resolve()
         if not p.exists():
@@ -51,18 +58,12 @@ def resolve_spec_root(explicit: str = None) -> Path:
     if env:
         return Path(env).expanduser().resolve()
 
-    cur = Path.cwd().resolve()
-    for candidate in [cur, *cur.parents]:
-        maybe = candidate / ".spec"
-        if maybe.is_dir():
-            return maybe
+    cwd = Path.cwd().resolve()
+    nested = cwd / ".spec"
+    if nested.is_dir():
+        return nested
 
-    print(
-        "找不到 .spec/ 目錄。請用 --spec-root 指定，或設定環境變數 "
-        f"{ENV_VAR}，或在專案某層目錄底下建立 .spec/。",
-        file=sys.stderr,
-    )
-    raise SystemExit(2)
+    return cwd
 
 
 def resolve_change_dir(spec_root: Path, ref: str) -> Path:
@@ -168,7 +169,7 @@ def _add_spec_root_arg(parser: argparse.ArgumentParser) -> None:
         "--spec-root",
         dest="spec_root",
         default=None,
-        help=f"目標專案的 .spec/ 路徑（預設：{ENV_VAR} 環境變數，或從目前目錄往上找 .spec/）",
+        help=f"目標專案的 spec root（預設：{ENV_VAR} 環境變數，或目前目錄的 .spec/，或目前目錄本身）",
     )
 
 
