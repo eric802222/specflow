@@ -20,6 +20,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
     specflow lint [paths]                       對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
+    specflow prompt <change-id-or-path> [--base main]  印出交付給 AI 的完整指令（純輸出，不落地成檔案）
     specflow root                               印出目前解析到的 spec root（除錯用）
 """
 
@@ -37,6 +38,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from lib.linters import proposal_lint  # noqa: E402
 from lib.common.atomic_write import atomic_write_text  # noqa: E402
+from lib.generators import prompt_gen  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
 
 TEMPLATE_PATH = REPO_ROOT / "templates" / "proposal.template.md"
@@ -206,6 +208,33 @@ def cmd_root(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prompt(args: argparse.Namespace) -> int:
+    """給一個 change-id，印出可以直接交給 AI 的交付內容——純輸出，不落地成任何檔案。
+
+    RD 要拿到「交付指令跟資料」，跑這個指令就好；輸出裡已經包含 proposal 摘要、
+    Blast Radius 統計、specs/ 的完整 diff，不需要再另外維護一份交付文件。
+    """
+    spec_root = resolve_spec_root(args.spec_root)
+    change_dir = resolve_change_dir(spec_root, args.change)
+    lifecycle_path = resolve_lifecycle_path(spec_root)
+
+    gate = next_action.gate_check(change_dir, lifecycle_path=lifecycle_path)
+    if not gate["ok"]:
+        print(f"無法產生交付內容：change 目前未通過檢查（{gate['next_action']}）", file=sys.stderr)
+        for err in gate["blocking_errors"]:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
+    try:
+        prompt = prompt_gen.build_prompt(change_dir.name, change_dir, spec_root, args.base)
+    except RuntimeError as exc:
+        print(f"產生失敗：{exc}", file=sys.stderr)
+        return 1
+
+    print(prompt)
+    return 0
+
+
 def _add_spec_root_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--spec-root",
@@ -244,6 +273,16 @@ def build_parser() -> argparse.ArgumentParser:
     root_parser = subparsers.add_parser("root", help="印出目前解析到的 --spec-root（除錯用）")
     _add_spec_root_arg(root_parser)
     root_parser.set_defaults(func=cmd_root)
+
+    prompt_parser = subparsers.add_parser(
+        "prompt", help="給一個 change-id，印出交付給 AI 的完整指令（純輸出，不落地成檔案）"
+    )
+    _add_spec_root_arg(prompt_parser)
+    prompt_parser.add_argument("change", help="change-id 或實際路徑")
+    prompt_parser.add_argument(
+        "--base", default="main", help="比較的基準 branch/ref（預設: main）"
+    )
+    prompt_parser.set_defaults(func=cmd_prompt)
 
     return parser
 
