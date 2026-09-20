@@ -153,3 +153,57 @@ def test_gate_check_passes_when_everything_valid(tmp_path):
     gate = next_action.gate_check(change_dir)
     assert gate["ok"] is True
     assert gate["status"] == "delivered"
+
+
+HOTFIX_PROPOSAL = """\
+---
+id: PROP-0003
+title: "資料庫連線池爆掉"
+impact_surface:
+  - .spec/db/schema.dbml
+type: hotfix
+status: draft
+---
+
+## 症狀 (Symptom)
+
+連線數衝到上限，API 全部逾時。
+"""
+
+
+def _make_hotfix_change(tmp_path):
+    change_id = "CP-999-hotfix"
+    change_dir = tmp_path / change_id
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text(HOTFIX_PROPOSAL, encoding="utf-8")
+    return change_dir
+
+
+def test_hotfix_type_surfaces_emergency_event_alongside_auto_suggestion(tmp_path):
+    """回歸測試：曾經只要有 auto 轉移（LINT_PASS）就會直接回傳，完全不提
+    HOTFIX_LIVE 這個手動事件存在——等於白做了緊急通道，因為沒人知道它在哪。"""
+    change_dir = _make_hotfix_change(tmp_path)
+    result = next_action.compute_next(change_dir)
+
+    assert result["next_action"] == "transition"  # LINT_PASS 仍是預設建議
+    assert result["suggested_command"].endswith("LINT_PASS")
+    assert "other_events" in result
+    assert "HOTFIX_LIVE" in result["other_events"]
+
+
+def test_feature_type_does_not_see_hotfix_event(tmp_path):
+    change_dir = _make_change(tmp_path, status="draft")  # 預設 feature type
+    result = next_action.compute_next(change_dir)
+
+    assert result["next_action"] == "transition"
+    assert "other_events" not in result  # feature 類型在 draft 沒有其他手動事件可選
+
+
+def test_gate_check_rejects_hotfix_live_for_feature_type_via_transition_layer(tmp_path):
+    """gate_check 本身不擋 type 不合法的事件（那是 lifecycle 層的事），但
+    確認 available_transitions 在來源頭就把它篩掉，兩層合起來才不會漏放。"""
+    change_dir = _make_change(tmp_path, status="draft")  # feature type
+    gate = next_action.gate_check(change_dir)
+    lc = gate["lifecycle"]
+    available = lc.available_transitions(gate["status"], gate["type"])
+    assert "HOTFIX_LIVE" not in [t.event for t in available]
