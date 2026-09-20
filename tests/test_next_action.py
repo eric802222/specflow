@@ -78,8 +78,21 @@ def test_invalid_proposal_blocks(tmp_path):
     assert result["blocking_errors"]
 
 
-def test_draft_with_valid_proposal_suggests_auto_transition(tmp_path):
-    change_dir = _make_change(tmp_path, status="draft")
+def test_draft_without_tasks_reports_write_tasks_md_not_a_broken_suggestion(tmp_path):
+    """回歸測試（issue #1）：draft 沒有 tasks.md 時，LINT_PASS 轉移的目標
+    delivered 會要求 tasks.md，這個轉移現在必須被視為不可行，不能被建議成
+    next_action=transition——不然照做下去，change 會立刻進入一個違反自身
+    invariant 的狀態，而且連修正用的轉移都會被 gate_check 擋住，等於卡死。"""
+    change_dir = _make_change(tmp_path, status="draft", with_tasks=False)
+    result = next_action.compute_next(change_dir)
+    assert result["next_action"] == "write_tasks_md"
+    assert result["blocking_errors"]
+
+
+def test_draft_with_tasks_already_written_suggests_auto_transition(tmp_path):
+    """tasks.md 在 draft 階段就先寫好（draft 本身不要求，但沒人禁止提前寫），
+    LINT_PASS 轉移到 delivered 後前提就已經滿足，應該正常建議這個轉移。"""
+    change_dir = _make_change(tmp_path, status="draft", with_tasks=True)
     result = next_action.compute_next(change_dir)
     assert result["next_action"] == "transition"
     assert result["target_status"] == "delivered"
@@ -155,6 +168,29 @@ def test_gate_check_passes_when_everything_valid(tmp_path):
     assert gate["status"] == "delivered"
 
 
+def test_check_state_prerequisites_flags_missing_tasks(tmp_path):
+    """issue #1 的核心單元測試：驗證『進入』某個狀態的前提，不是驗證目前狀態。"""
+    change_dir = _make_change(tmp_path, status="draft", with_tasks=False)
+    gate = next_action.gate_check(change_dir)
+    lc = gate["lifecycle"]
+
+    ok, action, errors = next_action.check_state_prerequisites(change_dir, lc, "delivered")
+    assert ok is False
+    assert action == "write_tasks_md"
+    assert errors
+
+
+def test_check_state_prerequisites_passes_when_tasks_exist(tmp_path):
+    change_dir = _make_change(tmp_path, status="draft", with_tasks=True)
+    gate = next_action.gate_check(change_dir)
+    lc = gate["lifecycle"]
+
+    ok, action, errors = next_action.check_state_prerequisites(change_dir, lc, "delivered")
+    assert ok is True
+    assert action is None
+    assert errors == []
+
+
 HOTFIX_PROPOSAL = """\
 ---
 id: PROP-0003
@@ -179,23 +215,40 @@ def _make_hotfix_change(tmp_path):
     return change_dir
 
 
-def test_hotfix_type_surfaces_emergency_event_alongside_auto_suggestion(tmp_path):
-    """回歸測試：曾經只要有 auto 轉移（LINT_PASS）就會直接回傳，完全不提
-    HOTFIX_LIVE 這個手動事件存在——等於白做了緊急通道，因為沒人知道它在哪。"""
+def test_hotfix_type_surfaces_emergency_event_when_normal_path_blocked(tmp_path):
+    """回歸測試：hotfix 類型在 draft 階段還沒寫 tasks.md 是常態（tasks.md 本來
+    就是事後才補的驗屍報告）。LINT_PASS 的目標 delivered 要求 tasks.md，這時候
+    不可行；HOTFIX_LIVE 標記了 skip_target_check，仍然可行。這裡要確認在
+    LINT_PASS 被擋住時，HOTFIX_LIVE 沒有被一起犧牲掉——找不到可行的 auto
+    轉移，要退而求其次找可行的 manual 轉移，而不是直接放棄回報。"""
     change_dir = _make_hotfix_change(tmp_path)
     result = next_action.compute_next(change_dir)
 
-    assert result["next_action"] == "transition"  # LINT_PASS 仍是預設建議
+    assert result["next_action"] == "await_manual_signal"
+    assert result["available_events"] == ["HOTFIX_LIVE"]
+
+
+def test_hotfix_type_with_tasks_already_written_prefers_normal_path(tmp_path):
+    """如果 tasks.md 已經先寫好了，LINT_PASS 的目標前提也滿足，應該正常建議
+    走 LINT_PASS，HOTFIX_LIVE 仍然作為 other_events 露出，不會被藏起來。"""
+    change_id = "CP-999-hotfix"
+    change_dir = tmp_path / change_id
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text(HOTFIX_PROPOSAL, encoding="utf-8")
+    (change_dir / "tasks.md").write_text(VALID_TASKS.format(change_id=change_id), encoding="utf-8")
+
+    result = next_action.compute_next(change_dir)
+    assert result["next_action"] == "transition"
     assert result["suggested_command"].endswith("LINT_PASS")
     assert "other_events" in result
     assert "HOTFIX_LIVE" in result["other_events"]
 
 
-def test_feature_type_does_not_see_hotfix_event(tmp_path):
-    change_dir = _make_change(tmp_path, status="draft")  # 預設 feature type
+def test_feature_type_without_tasks_reports_write_tasks_md(tmp_path):
+    change_dir = _make_change(tmp_path, status="draft", with_tasks=False)  # 預設 feature type
     result = next_action.compute_next(change_dir)
 
-    assert result["next_action"] == "transition"
+    assert result["next_action"] == "write_tasks_md"
     assert "other_events" not in result  # feature 類型在 draft 沒有其他手動事件可選
 
 
