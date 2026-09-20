@@ -7,13 +7,13 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 
     1. --spec-root <path>              明確指定
     2. 環境變數 SPECFLOW_SPEC_ROOT
-    3. 目前目錄底下的 .spec/（規格嘅在應用程式 repo 裡的 monorepo 模式）
+    3. 目前目錄底下的 .spec/（規格嵌在應用程式 repo 裡的 monorepo 模式）
     4. 目前目錄本身（規格自己獨立一個 repo，repo root 就是 spec root）
 
-範本（templates/）永遠跟著 specflow 自己的安裝位置走。change 生命周期定義
+範本（templates/）永遠跟著 specflow 自己的安裝位置走。change 生命週期定義
 （change-lifecycle.yaml）預設也是 specflow 自己內附的那份，但如果 spec root 底下
 有一份同名檔案（<spec-root>/change-lifecycle.yaml），會優先採用那份——讓不同專案
-可以客製化自己的流程，不用被綢死在同一套五段式狀態機上。
+可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
     specflow init <change-id> <title>          在 <spec-root>/changes/<change-id>/ 建立 proposal.md
@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent  # specflow 工具自己的�
 sys.path.insert(0, str(REPO_ROOT))
 
 from lib.linters import proposal_lint  # noqa: E402
+from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
 
 TEMPLATE_PATH = REPO_ROOT / "templates" / "proposal.template.md"
@@ -43,14 +45,18 @@ ENV_VAR = "SPECFLOW_SPEC_ROOT"
 ID_MARKER = "id: PROP-XXXX"
 TITLE_MARKER = 'title: "<一句話描述本次變更>"'
 
+# change_id 直接被拼進路徑（spec_root / "changes" / change_id），所以必須限制字元集：
+# 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、".."、"-foo" 這類會讓人誤讀的開頭）。
+CHANGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+
 
 def resolve_spec_root(explicit: str = None) -> Path:
     """算出目標專案的 spec root。
 
     優先序：--spec-root > SPECFLOW_SPEC_ROOT 環境變數 > 目前目錄底下的 .spec/
-    （monorepo 模式）> 目前目錄本身（独立 spec repo 模式）。最後一層一定成功，
+    （monorepo 模式）> 目前目錄本身（獨立 spec repo 模式）。最後一層一定成功，
     不會因為找不到而報錯——目錄選錯了會在後續指令操作時給出更具體的錯誤
-    （例如「changes/ 底下沒有 proposal.md」），比在這裡就攞下來更有幫助。
+    （例如「changes/ 底下沒有 proposal.md」），比在這裡就攔下來更有幫助。
     """
     if explicit:
         p = Path(explicit).expanduser().resolve()
@@ -101,6 +107,14 @@ def cmd_init(args: argparse.Namespace) -> int:
     change_id = args.change_id
     title = args.title
 
+    if not CHANGE_ID_RE.match(change_id):
+        print(
+            f"change-id 格式不合法：{change_id!r}（只能是英數字/底線/連字號/句點，"
+            "且不能以非英數字元開頭——change-id 會直接被拼進檔案路徑，格式必須嚴格）",
+            file=sys.stderr,
+        )
+        return 1
+
     if not TEMPLATE_PATH.exists():
         print(f"找不到範本：{TEMPLATE_PATH}", file=sys.stderr)
         return 1
@@ -123,7 +137,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     text = text.replace(TITLE_MARKER, f'title: "{title}"', 1)
 
     change_dir.mkdir(parents=True)
-    (change_dir / "proposal.md").write_text(text, encoding="utf-8")
+    atomic_write_text(change_dir / "proposal.md", text)
     print(f"已建立 change：{change_dir}")
     return 0
 
