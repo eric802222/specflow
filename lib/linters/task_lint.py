@@ -21,10 +21,10 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover
-    yaml = None
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from lib.common import frontmatter as fm  # noqa: E402
 
 MAX_TASKS = 15
 CODE_FENCE = "```"
@@ -48,32 +48,13 @@ class LintResult:
         return not self.errors
 
 
-def _split_frontmatter(text: str):
-    if not text.startswith("---"):
-        return None, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return None, text
-    _, fm_text, body = parts
-    return fm_text, body
-
-
 def lint_text(text: str, expected_change_id: str, path: Path = None) -> LintResult:
     result = LintResult(path=path or Path("<memory>"))
 
-    fm_text, body = _split_frontmatter(text)
-    if fm_text is None:
-        result.errors.append("缺少 frontmatter 區塊（tasks.md 必須以 --- 開頭並包含結尾的 ---）")
-        fm_data = {}
-    elif yaml is None:
-        result.errors.append("缺少 pyyaml 套件，無法解析 frontmatter")
-        fm_data = {}
-    else:
-        try:
-            fm_data = yaml.safe_load(fm_text) or {}
-        except yaml.YAMLError as exc:
-            result.errors.append(f"frontmatter YAML 解析失敗：{exc}")
-            fm_data = {}
+    fm_data, body, error = fm.load_frontmatter_data(text)
+    if error:
+        result.errors.append(error)
+        fm_data = fm_data or {}
 
     if isinstance(fm_data, dict):
         change_ref = fm_data.get("change")
@@ -83,7 +64,7 @@ def lint_text(text: str, expected_change_id: str, path: Path = None) -> LintResu
             result.errors.append(
                 f"frontmatter 的 change ('{change_ref}') 與所在資料夾 ('{expected_change_id}') 不一致"
             )
-    elif fm_text is not None:
+    elif not error:
         result.errors.append("frontmatter 必須是一個 YAML mapping")
 
     if CODE_FENCE in text:

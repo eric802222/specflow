@@ -16,15 +16,19 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover
-    yaml = None
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from lib.common import frontmatter as fm  # noqa: E402
 
 MAX_BODY_LINES = 35
 REQUIRED_FRONTMATTER_KEYS = ("id", "title", "impact_surface")
 REQUIRED_SECTION = "## 3. 非目標 (Non-Goals)"
 CODE_FENCE = "```"
+
+# 對外沿用舊名稱，讓其他呼叫端（bin/specflow.py 等）不用改 import
+read_frontmatter = fm.read_frontmatter
+write_frontmatter_field = fm.write_frontmatter_field
 
 
 @dataclass
@@ -37,17 +41,6 @@ class LintResult:
         return not self.errors
 
 
-def _split_frontmatter(text: str):
-    """把檔案切成 (frontmatter_yaml, body)。若找不到合法的 --- 區塊則回傳 (None, text)。"""
-    if not text.startswith("---"):
-        return None, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return None, text
-    _, fm_text, body = parts
-    return fm_text, body
-
-
 def _effective_line_count(body: str) -> int:
     """計算正文中的有效（非空白）行數。"""
     return sum(1 for line in body.splitlines() if line.strip())
@@ -56,26 +49,16 @@ def _effective_line_count(body: str) -> int:
 def lint_text(text: str, path: Path = None) -> LintResult:
     result = LintResult(path=path or Path("<memory>"))
 
-    fm_text, body = _split_frontmatter(text)
-
-    if fm_text is None:
-        result.errors.append("缺少 frontmatter 區塊（檔案必須以 --- 開頭並包含結尾的 ---）")
-        fm_data = {}
-    elif yaml is None:
-        result.errors.append("缺少 pyyaml 套件，無法解析 frontmatter")
-        fm_data = {}
-    else:
-        try:
-            fm_data = yaml.safe_load(fm_text) or {}
-        except yaml.YAMLError as exc:
-            result.errors.append(f"frontmatter YAML 解析失敗：{exc}")
-            fm_data = {}
+    fm_data, body, error = fm.load_frontmatter_data(text)
+    if error:
+        result.errors.append(error)
+        fm_data = fm_data or {}
 
     if isinstance(fm_data, dict):
         for key in REQUIRED_FRONTMATTER_KEYS:
             if key not in fm_data or fm_data[key] in (None, "", []):
                 result.errors.append(f"frontmatter 缺少必要欄位：{key}")
-    elif fm_text is not None:
+    elif not error:
         result.errors.append("frontmatter 必須是一個 YAML mapping")
 
     if CODE_FENCE in text:
@@ -96,34 +79,6 @@ def lint_text(text: str, path: Path = None) -> LintResult:
 def lint_file(path: Path) -> LintResult:
     text = path.read_text(encoding="utf-8")
     return lint_text(text, path=path)
-
-
-def read_frontmatter(path: Path) -> dict:
-    """讀出一份 proposal.md（或同樣有 --- frontmatter 的檔案）的 frontmatter，解析失敗回傳 {}。"""
-    text = path.read_text(encoding="utf-8")
-    fm_text, _ = _split_frontmatter(text)
-    if fm_text is None or yaml is None:
-        return {}
-    try:
-        return yaml.safe_load(fm_text) or {}
-    except yaml.YAMLError:
-        return {}
-
-
-def write_frontmatter_field(path: Path, key: str, value) -> None:
-    """就地更新 frontmatter 裡的一個欄位，正文原封不動。"""
-    if yaml is None:
-        raise RuntimeError("需要 pyyaml 才能寫入 frontmatter")
-
-    text = path.read_text(encoding="utf-8")
-    fm_text, body = _split_frontmatter(text)
-    if fm_text is None:
-        raise ValueError(f"{path} 找不到 frontmatter 區塊")
-
-    data = yaml.safe_load(fm_text) or {}
-    data[key] = value
-    new_fm = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-    path.write_text(f"---\n{new_fm}---{body}", encoding="utf-8")
 
 
 def main(argv=None) -> int:
