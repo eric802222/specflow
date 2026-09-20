@@ -54,3 +54,36 @@ def test_missing_proposal_fails(tmp_path):
 def test_missing_dir_fails(tmp_path):
     result = change_shape_lint.lint_dir(tmp_path / "does-not-exist")
     assert not result.ok
+
+
+def test_dotfile_other_than_gitkeep_fails(tmp_path):
+    change_dir = tmp_path / "CP-153"
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text("x", encoding="utf-8")
+    (change_dir / ".NOTES.md").write_text("AI 用點開頭檔名繞過白名單", encoding="utf-8")
+
+    result = change_shape_lint.lint_dir(change_dir)
+    assert not result.ok
+    assert any(".NOTES.md" in e for e in result.errors)
+
+
+def test_hidden_subdirectory_fails(tmp_path):
+    change_dir = tmp_path / "CP-153"
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text("x", encoding="utf-8")
+    (change_dir / ".hidden_delta_folder").mkdir()
+    (change_dir / ".hidden_delta_folder" / "sneaky.py").write_text("x", encoding="utf-8")
+
+    result = change_shape_lint.lint_dir(change_dir)
+    assert not result.ok
+    assert any(".hidden_delta_folder" in e for e in result.errors)
+
+
+def test_gitkeep_is_allowed(tmp_path):
+    change_dir = tmp_path / "CP-153"
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text("x", encoding="utf-8")
+    (change_dir / ".gitkeep").write_text("", encoding="utf-8")
+
+    result = change_shape_lint.lint_dir(change_dir)
+    assert result.ok, result.errors
