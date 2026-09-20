@@ -125,3 +125,31 @@ def test_extra_file_blocks_before_anything_else(tmp_path):
     result = next_action.compute_next(change_dir)
     assert result["next_action"] == "fix_change_shape"
     assert result["status"] is None
+
+
+def test_gate_check_blocks_shape_violation_regardless_of_status(tmp_path):
+    """回歸測試：之前 transition 只在 auto 事件才重驗 proposal_lint，manual 事件
+    （DEV_DONE 等）完全沒被驗證，導致白名單/task_lint 形同虛設。gate_check 現在
+    是 next 與 transition 共用的唯一入口，這裡直接鎖住它對違規案例不會放行。"""
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    (change_dir / "NOTES.md").write_text("不該存在", encoding="utf-8")
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is False
+    assert gate["next_action"] == "fix_change_shape"
+
+
+def test_gate_check_blocks_when_tasks_missing_even_if_shape_and_proposal_ok(tmp_path):
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=False)
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is False
+    assert gate["next_action"] == "write_tasks_md"
+
+
+def test_gate_check_passes_when_everything_valid(tmp_path):
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is True
+    assert gate["status"] == "delivered"
