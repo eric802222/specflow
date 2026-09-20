@@ -16,11 +16,12 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
-    specflow init <change-id> <title> [--type feature|bugfix|hotfix]  建立 proposal.md
+    specflow init <change-id> <title> [--type feature|bugfix|hotfix|baseline]  建立 proposal.md
     specflow lint [paths]                       對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
     specflow prompt <change-id-or-path> [--base main]  印出交付給 AI 的完整指令（純輸出，不落地成檔案）
+    specflow coverage                            純資訊：glossary 實體的檢查覆蓋率（不會擋流程）
     specflow root                               印出目前解析到的 spec root（除錯用）
 """
 
@@ -37,6 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent  # specflow 工具自己的�
 sys.path.insert(0, str(REPO_ROOT))
 
 from lib.linters import proposal_lint  # noqa: E402
+from lib.linters import cross_spec_lint  # noqa: E402
 from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.generators import prompt_gen  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
@@ -45,6 +47,7 @@ TEMPLATE_PATHS = {
     "feature": REPO_ROOT / "templates" / "proposal.template.md",
     "bugfix": REPO_ROOT / "templates" / "proposal-bugfix.template.md",
     "hotfix": REPO_ROOT / "templates" / "proposal-hotfix.template.md",
+    "baseline": REPO_ROOT / "templates" / "proposal-baseline.template.md",
 }
 ENV_VAR = "SPECFLOW_SPEC_ROOT"
 
@@ -241,6 +244,41 @@ def cmd_root(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """純資訊指令：glossary.yaml 定義了哪些實體、cross_spec_lint 實際檢查到
+    哪幾層——讓接手一個沒有既有規格的專案時，能看得到「補文件補到哪了」，
+    但不會因為還沒補完就擋住任何流程。exit code 永遠是 0。
+    """
+    spec_root = resolve_spec_root(args.spec_root)
+    specs_dir = spec_root / "specs"
+    glossary_path = specs_dir / "glossary.yaml"
+
+    if not glossary_path.exists():
+        print(f"{glossary_path} 不存在，還沒有任何 glossary 定義（這是合法的起點，不是錯誤）")
+        return 0
+
+    status_map = cross_spec_lint.load_glossary_status_map(glossary_path)
+    if not status_map:
+        print("glossary.yaml 裡還沒有任何實體")
+        return 0
+
+    print(f"glossary.yaml 定義了 {len(status_map)} 個實體：\n")
+    for key in sorted(status_map):
+        result = cross_spec_lint.lint_entity(glossary_path, key, specs_dir)
+        checked = sorted(c.layer for c in result.checks if c.checked)
+        skipped = sorted(c.layer for c in result.checks if not c.checked)
+        icon = "✓" if checked else "…"
+        checked_str = ", ".join(checked) if checked else "(無)"
+        skipped_str = ", ".join(skipped) if skipped else "(無)"
+        print(f"  {icon} {key}：已檢查 [{checked_str}]　略過 [{skipped_str}]")
+
+    print(
+        "\n（這裡只統計 glossary.yaml 裡已經定義的實體；還沒被寫進 glossary 的"
+        "既有系統行為，本來就不會出現在這份清單——先動到哪個角落，才需要先補上那個角落。）"
+    )
+    return 0
+
+
 def cmd_prompt(args: argparse.Namespace) -> int:
     """給一個 change-id，印出可以直接交給 AI 的交付內容——純輸出，不落地成任何檔案。
 
@@ -296,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("title", help="Proposal 標題")
     init_parser.add_argument(
         "--type",
-        choices=["feature", "bugfix", "hotfix"],
+        choices=["feature", "bugfix", "hotfix", "baseline"],
         default="feature",
         help="決定套用哪一份範本、哪一組 proposal_lint 規則（預設: feature）",
     )
@@ -321,6 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
     root_parser = subparsers.add_parser("root", help="印出目前解析到的 --spec-root（除錯用）")
     _add_spec_root_arg(root_parser)
     root_parser.set_defaults(func=cmd_root)
+
+    coverage_parser = subparsers.add_parser(
+        "coverage", help="純資訊：glossary.yaml 裡每個實體被 cross_spec_lint 檢查到哪幾層（不會擋任何流程）"
+    )
+    _add_spec_root_arg(coverage_parser)
+    coverage_parser.set_defaults(func=cmd_coverage)
 
     prompt_parser = subparsers.add_parser(
         "prompt", help="給一個 change-id，印出交付給 AI 的完整指令（純輸出，不落地成檔案）"
