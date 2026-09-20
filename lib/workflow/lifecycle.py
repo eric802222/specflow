@@ -23,6 +23,7 @@ class Transition:
     event: str
     target: str
     auto: bool
+    requires_type: str = None
 
 
 class Lifecycle:
@@ -46,7 +47,7 @@ class Lifecycle:
         return bool(state.get("requires_tasks"))
 
     def transitions(self, name: str) -> list:
-        """回傳某狀態底下所有合法轉移（Transition 物件的清單）。"""
+        """回傳某狀態底下所有合法轉移（Transition 物件的清單），不篩選 requires_type。"""
         state = self.states.get(name, {})
         # 防呆：YAML 1.1 會把沒加引號的 `on:` 解析成布林值 True 當 key，
         # 這裡兩種都接受，避免因為忘了加引號就整組轉移規則悄悄消失。
@@ -54,11 +55,34 @@ class Lifecycle:
         result = []
         for event, spec in on.items():
             if isinstance(spec, dict):
-                result.append(Transition(event=event, target=spec.get("target"), auto=bool(spec.get("auto"))))
+                result.append(
+                    Transition(
+                        event=event,
+                        target=spec.get("target"),
+                        auto=bool(spec.get("auto")),
+                        requires_type=spec.get("requires_type"),
+                    )
+                )
             else:
-                # 允許簡寫：EVENT: target_state（視為非自動）
+                # 允許簡寫：EVENT: target_state（視為非自動、無 type 限制）
                 result.append(Transition(event=event, target=spec, auto=False))
         return result
+
+    def available_transitions(self, name: str, proposal_type: str = None) -> list:
+        """回傳某狀態底下，這個 proposal 的 type 有資格使用的轉移——
+        requires_type 沒設定的轉移永遠可用；有設定的，只有 type 對得上才算可用。
+        """
+        return [
+            t for t in self.transitions(name)
+            if t.requires_type is None or t.requires_type == proposal_type
+        ]
+
+    def find_transition(self, name: str, event: str):
+        """回傳某狀態底下、事件名稱相符的 Transition（不篩選 requires_type），找不到回 None。"""
+        for t in self.transitions(name):
+            if t.event == event:
+                return t
+        return None
 
     def auto_transitions(self, name: str) -> list:
         return [t for t in self.transitions(name) if t.auto]
