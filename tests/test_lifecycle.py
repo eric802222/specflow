@@ -96,3 +96,29 @@ def test_live_pending_review_requires_tasks_and_leads_to_applied():
     assert lc.requires_tasks("live_pending_review") is True
     t = lc.find_transition("live_pending_review", "POSTREVIEW_DONE")
     assert t.target == "applied"
+
+
+def test_hotfix_live_has_skip_target_check():
+    lc = lifecycle_mod.load_lifecycle()
+    t = lc.find_transition("draft", "HOTFIX_LIVE")
+    assert t.skip_target_check is True
+
+
+def test_lint_pass_does_not_skip_target_check():
+    lc = lifecycle_mod.load_lifecycle()
+    t = lc.find_transition("draft", "LINT_PASS")
+    assert t.skip_target_check is False
+
+
+def test_allows_reflects_bundled_capabilities():
+    lc = lifecycle_mod.load_lifecycle()
+    assert lc.allows("draft", "edit_proposal") is True
+    assert lc.allows("draft", "generate_delivery") is False
+    assert lc.allows("delivered", "generate_delivery") is True
+    assert lc.allows("applied", "generate_delivery") is False
+
+
+def test_allows_defaults_false_for_unknown_state_or_capability():
+    lc = lifecycle_mod.load_lifecycle()
+    assert lc.allows("not_a_real_state", "generate_delivery") is False
+    assert lc.allows("delivered", "not_a_real_capability") is False
