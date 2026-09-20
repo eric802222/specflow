@@ -1,7 +1,7 @@
 """共用的 Frontmatter Markdown 解析／寫入工具。
 
 被 proposal_lint.py、task_lint.py 共用，避免同一套邏輯在兩個檔案各自維護一份、
-修 4bug 要修兩次（曾經真的踩過：兩份各自用 text.split("---", 2) 切分，遇到欄位
+修 bug 要修兩次（曾經真的踩過：兩份各自用 text.split("---", 2) 切分，遇到欄位
 值本身含有連續三個減號就會切錯——例如 title 用了長破折號、路徑帶 "---"）。
 
 分隔線的判定：只認「單獨一行、去除頭尾空白後剛好是 --- 」的那一行，不是在整份
@@ -17,6 +17,8 @@ try:
     import yaml
 except ImportError:  # pragma: no cover
     yaml = None
+
+from lib.common.atomic_write import atomic_write_text
 
 _DELIM_RE = re.compile(r"^---[ \t]*\r?$", re.MULTILINE)
 
@@ -63,8 +65,8 @@ def write_frontmatter_field(path: Path, key: str, value) -> None:
 
     刻意只支援替換形如 `key: value` 的單行純量欄位；key 必須已經存在於
     frontmatter 裡，否則拋例外。不對整份 frontmatter 重新序列化——那樣會連
-    引號、縮排風格都被 YAML dumper 重新排版，讓 git diff 在只改一個欄位
-    却顯示整段 frontmatter 都變了，違背「Diff 即交付」希望 diff 保持乾淨的初衷。
+    引號、縮排風格都被 YAML dumper 重新排版，讓 git diff 在只改一個欄位時
+    卻顯示整段 frontmatter 都變了，違背「Diff 即交付」希望 diff 保持乾淨的初衷。
     """
     text = path.read_text(encoding="utf-8")
     fm_text, _ = split_frontmatter(text)
@@ -82,7 +84,7 @@ def write_frontmatter_field(path: Path, key: str, value) -> None:
     matches = list(_DELIM_RE.finditer(text))
     first, second = matches[0], matches[1]
     new_text = text[: first.end()] + new_fm_text + text[second.start():]
-    path.write_text(new_text, encoding="utf-8")
+    atomic_write_text(path, new_text)
 
 
 def _format_scalar(value) -> str:
