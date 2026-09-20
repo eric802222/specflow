@@ -8,21 +8,24 @@
 #   false → 條件是人（或 AI）明確宣告的事件，工具不能替你決定「問題找到了」或「開發完成了」
 #
 # `requires_type`（可選）：這個轉移只有 proposal.md 的 type 欄位符合才合法。
-# 目前只有 HOTFIX_LIVE 用到——緊急變更繞過正常審核直接上線，但這件事本身
-# 必須誠實標記 type: hotfix 才能觸發，不能隨便找個捷徑抄。
+# HOTFIX_LIVE 用來讓緊急變更繞過正常審核直接上線，但這件事本身必須誠實標記
+# type: hotfix 才能觸發，不能隨便找個捷徑拄。BASELINE_CAPTURED 用來讓「描述
+# 既有系統現況」的 baseline change 直接進終點，不用走完整的開發生命週期——
+# 接手一個沒有規格的既有專案時，逼每一筆現況記錄都跑過 delivered/ready 這種
+# 為「開發變更」設計的中間狀態，只會增加不必要的摩擦力。
 #
 # `skip_target_check`（可選）：正常情況下，任何轉移都會先驗證「轉移完成後」
 # 的目標狀態是否已經滿足自己的前提（例如 requires_tasks），不合法就直接擋下
 # 轉移——這是刻意設計，避免合法操作把 change 送進一個立刻違反自身 invariant
 # 的狀態。但 HOTFIX_LIVE 是唯一的例外：它的整個存在意義就是「先宣告上線、
-# 事後才補 tasks.md（驗屍報告）」，如果連這個轉移都要求進入前先有 tasks.md，
+# 事後才補 tasks.md（驗屩報告）」，如果連這個轉移都要求進入前先有 tasks.md，
 # 緊急通道就沒有意義了。所以只有這條轉移標記 skip_target_check: true，
 # 目標狀態 live_pending_review 自己的 requires_tasks 仍然生效——只是不會在
 # 「進入」的當下就被擋，而是在「想離開」live_pending_review 時才會被要求。
 #
 # `allows`（可選）：這個狀態允許哪些 command capability（例如 generate_delivery）。
 # CLI 指令查這裡決定能不能跑，不要自己在程式碼裡 hard-code「delivered 才能產生
-# 交付內容」這種規則——那樣散在各處的規則會跟 lifecycle 定義的漸漸分岔。
+# 交付內容」這種規則——那樣散在各處的規則會跟 lifecycle 定義的漸漸分岐。
 
 id: change_lifecycle
 initial: draft
@@ -41,6 +44,10 @@ states:
         auto: false
         requires_type: hotfix
         skip_target_check: true
+      BASELINE_CAPTURED:
+        target: baseline_recorded
+        auto: true
+        requires_type: baseline
 
   delivered:
     description: 已交付（給 RD 或等待實作），proposal/tasks 均合法
@@ -76,7 +83,7 @@ states:
     description: >-
       緊急變更已經上線，事後審查（Post-Implementation Review）尚未補交。
       仿 ITIL Emergency Change：跳過事前審核換取速度，但事後一定要補一份
-      記錄，不會因為「火滅了」就不了了之。
+      記錄，不會因為「火滴了」就不了了之。
     requires_tasks: true
     allows: [edit_tasks]
     "on":
@@ -87,5 +94,15 @@ states:
   applied:
     description: 已併入 specs/ 並封存，流程終點
     requires_tasks: true
+    allows: []
+    final: true
+
+  baseline_recorded:
+    description: >-
+      現況已記錄並併入 specs/。這是 baseline type 專屬的終點狀態——跟 applied
+      分開，因為 baseline 純粹是描述既有系統現況，沒有開發工作、永遠不會有
+      tasks.md，套用 applied 的 requires_tasks 語意並不合適（會讓這個 change
+      永久卡在「未完成」）。
+    requires_tasks: false
     allows: []
     final: true
