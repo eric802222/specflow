@@ -1,9 +1,10 @@
 ---
 id: PROP-XXXX
-title: "<一句話描述本次變更>"
+title: "<一句話描述>"
 impact_surface:
   - .spec/db/schema.dbml
   - .spec/api/main.tsp
+type: feature
 status: draft
 refs:
   - JIRA-XXXX
