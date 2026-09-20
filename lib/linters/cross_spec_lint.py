@@ -9,7 +9,11 @@
       `stage` 代表頁面路由階段、語意不同於實體狀態，此處不查）
 
 命名慣例可能不符合每個專案的實際命名。找不到對應的 enum/檔案時該層會被「略過」而非報錯，
-但比對到的值只要不在 glossary 允許集合內，一律回報為錯誤——找不到來源是資訊，值不合法是錯誤。
+比對到的值只要不在 glossary 允許集合內，一律回報為錯誤——找不到來源是資訊，值不合法是錯誤。
+
+同一個原則也適用在「entity 本身還沒被 glossary.yaml 定義」的情況：接手一個還沒有規格的
+既有專案時，大多數實體本來就還沒被記錄，這不該讓 lint 報錯——只有「已經記錄、但記錄彼此
+矛盾」才算錯誤。「還沒治理」是資料，不是缺陷。
 
 用法：
     python3 cross_spec_lint.py <glossary.yaml> <entity_key> [spec_root=.spec]
@@ -238,7 +242,17 @@ def lint_entity(glossary_path: Path, entity_key: str, spec_root: Path) -> CrossS
     status_map = load_glossary_status_map(glossary_path)
     allowed = status_map.get(entity_key)
     if allowed is None:
-        result.errors.append(f"glossary.yaml 未定義實體 '{entity_key}'，無法檢查其 status")
+        # 這個實體還沒被 glossary.yaml 記錄過——這是「還沒治理」，不是錯誤。
+        # 接手一個沒有既有規格的專案時，大多數實體本來就還沒被寫進 glossary，
+        # 不該因此擋住整條 lint 流程；只有「已經記錄、但記錄彼此矛盾」才算錯誤。
+        # 找不到定義是資訊，值不合法才是錯誤——這條原則跟其他四層一致。
+        result.checks = [
+            LayerCheck(
+                "glossary",
+                f"{glossary_path}（實體 '{entity_key}' 尚未定義，略過四層檢查）",
+                checked=False,
+            )
+        ]
         return result
 
     checks = [
@@ -276,6 +290,12 @@ def main(argv=None) -> int:
             print(f"✗ [{c.layer}] {c.source}：發現 {len(c.mismatches)} 處不一致")
         else:
             print(f"✓ [{c.layer}] {c.source}")
+
+    any_checked = any(c.checked for c in result.checks)
+
+    if result.ok and not any_checked:
+        print(f"\n… '{entity_key}' 尚未被治理（未在 glossary.yaml 定義），略過所有檢查——這是合法狀態，不是錯誤")
+        return 0
 
     if result.ok:
         print(f"\n✓ status 值全數符合 glossary 定義（{entity_key}）")
