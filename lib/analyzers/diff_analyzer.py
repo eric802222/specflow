@@ -1,17 +1,9 @@
 """影響範圍分析器（Blast Radius）。
 
-MVP 範圍：對 `.spec/` 底下的 git diff 做「按目錄分類計數」的粗粒度統計——
-不做跨檔案引用追蹤（那是下一階段），先回答「這次變更動到了哪些層」。
-
-輸出範例：
-    Blast Radius 統計：
-      proposals: 1 個檔案
-      glossary: 1 個檔案
-      db: 0 個檔案
-      api: 1 個檔案
-      ui: 1 個檔案
-      logic: 0 個檔案
-      合計: 4 個檔案
+對 `<spec-root>/specs/` 底下的 git diff 做「按目錄分類計數」的粗粒度統計——
+不做跨檔案引用追蹤，先回答「這次變更動到了哪些層」。統計對象是 specs/（目前
+正式生效的規格），不是 changes/<id>/（那只是流程文件，proposal.md 改了幾行
+不算「動到系統的哪個部分」。
 """
 
 from __future__ import annotations
@@ -21,7 +13,6 @@ import sys
 from pathlib import Path
 
 CATEGORY_PREFIXES = {
-    "proposals": "proposals/",
     "glossary": "glossary.yaml",
     "db": "db/",
     "api": "api/",
@@ -30,11 +21,13 @@ CATEGORY_PREFIXES = {
 }
 
 
-def get_changed_spec_files(spec_root: Path, base_ref: str = "HEAD") -> list:
-    """回傳與 base_ref 相比、`.spec/` 底下有變動的檔案路徑清單（repo-relative）。"""
+def get_changed_files(specs_dir: Path, base_ref: str = "HEAD") -> list:
+    """回傳與 base_ref 相比、specs_dir 底下有變動的檔案路徑清單（repo-relative）。"""
+    cwd = specs_dir if specs_dir.exists() else specs_dir.parent
     try:
         output = subprocess.run(
-            ["git", "diff", "--name-only", base_ref, "--", str(spec_root)],
+            ["git", "diff", "--name-only", base_ref, "--", str(specs_dir)],
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             check=True,
@@ -44,9 +37,9 @@ def get_changed_spec_files(spec_root: Path, base_ref: str = "HEAD") -> list:
     return [line for line in output.splitlines() if line.strip()]
 
 
-def categorize(changed_files: list, spec_root_name: str = ".spec") -> dict:
+def categorize(changed_files: list, specs_dir_name: str = "specs") -> dict:
     buckets = {cat: [] for cat in CATEGORY_PREFIXES}
-    marker = f"{spec_root_name}/"
+    marker = f"{specs_dir_name}/"
     for f in changed_files:
         idx = f.find(marker)
         if idx == -1:
@@ -69,14 +62,24 @@ def summarize(buckets: dict) -> str:
     return "\n".join(lines)
 
 
+def analyze(specs_dir: Path, base_ref: str = "HEAD") -> dict:
+    """回傳 {"changed_files": [...], "buckets": {...}, "summary": "..."}，方便其他模組呼叫。"""
+    changed = get_changed_files(specs_dir, base_ref)
+    buckets = categorize(changed, specs_dir_name=specs_dir.name)
+    return {
+        "changed_files": changed,
+        "buckets": buckets,
+        "summary": summarize(buckets),
+    }
+
+
 def main(argv=None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
-    spec_root = Path(argv[0]) if argv else Path(".spec")
+    specs_dir = Path(argv[0]) if argv else Path(".spec/specs")
     base_ref = argv[1] if len(argv) > 1 else "HEAD"
 
-    changed = get_changed_spec_files(spec_root, base_ref)
-    buckets = categorize(changed, spec_root_name=spec_root.name)
-    print(summarize(buckets))
+    result = analyze(specs_dir, base_ref)
+    print(result["summary"])
     return 0
 
 
