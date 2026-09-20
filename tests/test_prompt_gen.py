@@ -29,7 +29,7 @@ status: delivered
 
 ## 3. 非目標 (Non-Goals)
 
-- 不做自動核準
+- 不做自動核准
 """
 
 
@@ -79,3 +79,31 @@ def test_prompt_notes_when_no_diff(tmp_path):
 
     prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
     assert "無變更" in prompt
+
+
+def test_prompt_includes_tasks_content(tmp_path):
+    """回歸測試（issue #2）：交付內容必須真的包含 tasks.md，不能只有 proposal
+    摘要跟 diff——不然 commit 訊息要求的 <task-id>，AI 根本沒東西可以引用。"""
+    repo_dir, spec_root, change_dir = _init_repo_with_change(tmp_path)
+    (change_dir / "tasks.md").write_text(
+        "---\nchange: CP-1\n---\n\n"
+        "- [ ] add-reason-field: 加上 reason_note 欄位 (touches: db/schema.dbml)\n"
+        "- [ ] show-in-ui: 核准頁面顯示理由 (touches: ui/pages/approval.wf.yaml)\n",
+        encoding="utf-8",
+    )
+
+    prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
+
+    assert "add-reason-field" in prompt
+    assert "show-in-ui" in prompt
+    assert "reason_note" in prompt
+    # 順序要保留，不能被打散重排
+    assert prompt.index("add-reason-field") < prompt.index("show-in-ui")
+
+
+def test_prompt_notes_when_tasks_missing(tmp_path):
+    """tasks.md 還沒建立時，輸出裡要清楚說明，不能假裝有內容。"""
+    repo_dir, spec_root, change_dir = _init_repo_with_change(tmp_path)
+
+    prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
+    assert "尚未建立 tasks.md" in prompt
