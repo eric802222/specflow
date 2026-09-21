@@ -16,7 +16,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
-    specflow init <change-id> <title> [--type feature|bugfix|hotfix|baseline]  建立 proposal.md
+    specflow init <change-id> <title> [--type ...] [--with-design]  建立 proposal.md（可選 design.md）
     specflow lint [paths]                       對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
@@ -55,7 +55,7 @@ ID_MARKER = "id: PROP-XXXX"
 TITLE_MARKER = 'title: "<一句話描述>"'
 
 # change_id 直接被拼進路徑（spec_root / "changes" / change_id），所以必須限制字元集：
-# 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、".."、"-foo" 這類會讓人誤讀的開頭）。
+# 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、"..", "-foo" 這類會讓人誤讀的開頭）。
 CHANGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
 
@@ -149,6 +149,13 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     change_dir.mkdir(parents=True)
     atomic_write_text(change_dir / "proposal.md", text)
+
+    if args.with_design:
+        design_template_path = REPO_ROOT / "templates" / "design.template.md"
+        design_text = design_template_path.read_text(encoding="utf-8")
+        design_text = design_text.replace("change: CP-XXXX-change-slug", f"change: {change_id}", 1)
+        atomic_write_text(change_dir / "design.md", design_text)
+
     print(f"已建立 change：{change_dir}（type: {change_type}）")
     return 0
 
@@ -337,6 +344,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["feature", "bugfix", "hotfix", "baseline"],
         default="feature",
         help="決定套用哪一份範本、哪一組 proposal_lint 規則（預設: feature）",
+    )
+    init_parser.add_argument(
+        "--with-design",
+        action="store_true",
+        help="同時建立 design.md（裝技術決策與取捨，proposal.md 的行數限制不適用）",
     )
     init_parser.set_defaults(func=cmd_init)
 
