@@ -16,11 +16,11 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
-    specflow init <change-id> <title> [--type ...] [--with-design]  建立 proposal.md（可選 design.md）
-    specflow lint [paths]                       對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
+    specflow init <change-id> <title> [--type ...] [--with-design]  建立 proposal.md（可選 design.md/tasks.md）
+    specflow lint [paths-or-change-id]          對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
-    specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
-    specflow prompt <change-id-or-path> [--base main]  印出交付給 AI 的完整指令（純輸出，不落地成檔案）
+    specflow transition <change-id-or-path> <event> [--auto-commit] [--commit-ref sha]  套用一次合法的狀態轉移
+    specflow prompt <change-id-or-path> [--base ref]   印出交付給 AI 的完整指令（純輸出，不落地成檔案；--base 預設自動偵測）
     specflow coverage                            純資訊：glossary 實體的檢查覆蓋率（不會擋流程）
     specflow render [--out dist]                 把 specs/ 渲染成渲染後的產物（目錄頁 + 各 DSL 內容）
     specflow root                               印出目前解析到的 spec root（除錯用）
@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +52,11 @@ TEMPLATE_PATHS = {
     "hotfix": REPO_ROOT / "templates" / "proposal-hotfix.template.md",
     "baseline": REPO_ROOT / "templates" / "proposal-baseline.template.md",
 }
+# 這兩種 type 的生命週期最終一定會要求 tasks.md 存在（delivered.requires_tasks=true），
+# 範本又已經現成，init 卻不落地逼人手刻——這是真的有人試跑踩到的坑。baseline 永遠不會
+# 進到要求 tasks 的狀態、hotfix 的 tasks.md 本來就設計成事後才補（見 change-lifecycle.yaml
+# 的 skip_target_check 說明），這兩種硬塞一份假的 tasks.md 反而是誤導，所以不自動產生。
+TYPES_WITH_AUTO_TASKS = {"feature", "bugfix"}
 ENV_VAR = "SPECFLOW_SPEC_ROOT"
 
 ID_MARKER = "id: PROP-XXXX"
@@ -113,6 +119,17 @@ def resolve_lifecycle_path(spec_root: Path) -> Path:
     return custom if custom.is_file() else None
 
 
+def _impact_surface_touches_specs(proposal_path: Path) -> bool:
+    """檢查 proposal.md 的 impact_surface 有沒有任何一項落在 specs/ 底下。
+    純文字比對，不驗證那個路徑是不是真的存在、內容有沒有改——這條檢查本來就
+    只是提醒，不是硬性驗證，跟其他 lint 一樣只管格式層面的東西。"""
+    fm_data = proposal_lint.read_frontmatter(proposal_path)
+    surface = fm_data.get("impact_surface") if isinstance(fm_data, dict) else None
+    if not isinstance(surface, list):
+        return False
+    return any("specs/" in str(item) for item in surface)
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     spec_root = resolve_spec_root(args.spec_root)
     change_id = args.change_id
@@ -158,19 +175,38 @@ def cmd_init(args: argparse.Namespace) -> int:
         design_text = design_text.replace("change: CP-XXXX-change-slug", f"change: {change_id}", 1)
         atomic_write_text(change_dir / "design.md", design_text)
 
+    if change_type in TYPES_WITH_AUTO_TASKS:
+        tasks_template_path = REPO_ROOT / "templates" / "tasks.template.md"
+        tasks_text = tasks_template_path.read_text(encoding="utf-8")
+        tasks_text = tasks_text.replace("change: CP-XXXX-change-slug", f"change: {change_id}", 1)
+        atomic_write_text(change_dir / "tasks.md", tasks_text)
+
     print(f"已建立 change：{change_dir}（type: {change_type}）")
     return 0
 
 
 def cmd_lint(args: argparse.Namespace) -> int:
+    spec_root = resolve_spec_root(args.spec_root)
     paths = args.paths
     if not paths:
-        spec_root = resolve_spec_root(args.spec_root)
         changes_dir = spec_root / "changes"
         paths = [str(p) for p in sorted(changes_dir.glob("*/proposal.md"))]
         if not paths:
             print(f"{changes_dir} 底下沒有任何 proposal.md")
             return 0
+    else:
+        # 跟 next/transition/prompt 一致：先當成字面路徑，不存在的話試試看解析成
+        # <spec-root>/changes/<id>/proposal.md——之前 lint 只吃路徑不吃 change-id，
+        # 跟其他指令的呼叫方式不一致，是真的有人試跑時撞到的坑。
+        resolved = []
+        for p in paths:
+            path_obj = Path(p)
+            if path_obj.exists():
+                resolved.append(str(path_obj))
+                continue
+            candidate = resolve_change_dir(spec_root, p) / "proposal.md"
+            resolved.append(str(candidate) if candidate.exists() else p)
+        paths = resolved
 
     return proposal_lint.main(paths)
 
@@ -242,7 +278,42 @@ def cmd_transition(args: argparse.Namespace) -> int:
 
     proposal_path = change_dir / "proposal.md"
     proposal_lint.write_frontmatter_field(proposal_path, "status", target)
+
+    if args.commit_ref:
+        # 純紀錄用途，不做任何 git 操作——把「這個轉移對應哪個實作 commit」寫進
+        # frontmatter，讓文件鍊可以從 change 往回指到程式碼，不用只靠 commit
+        # message 手寫慣例才連得回來。填不填完全自由，lint 不因為沒填就報錯。
+        proposal_lint.write_frontmatter_field(
+            proposal_path, "implementation_commit", args.commit_ref, create_if_missing=True
+        )
+
     print(f"{change_id}: {current_status} --{args.event}--> {target}")
+
+    if t.warn_if_no_specs_touch and not _impact_surface_touches_specs(proposal_path):
+        print(
+            f"提醒：{change_id} 的 impact_surface 沒有任何一項落在 specs/ 底下——"
+            "這個 change 完成後可能沒有留下任何 SSOT 痕跡，確定嗎？（純提醒，不擋流程）",
+            file=sys.stderr,
+        )
+
+    if args.auto_commit:
+        try:
+            subprocess.run(
+                ["git", "add", str(proposal_path)], cwd=str(change_dir), check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", f"specflow: {change_id} {current_status} -> {target} ({args.event})"],
+                cwd=str(change_dir),
+                check=True,
+                capture_output=True,
+            )
+            print(f"已自動 commit：{change_id} {current_status} -> {target}")
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            print(
+                f"警告：狀態轉移已經成功，但自動 commit 失敗（{exc}）——請自行 git add/commit proposal.md",
+                file=sys.stderr,
+            )
+
     return 0
 
 
@@ -383,7 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     lint_parser = subparsers.add_parser("lint", help="對 Proposal 檔案執行 lint")
     _add_spec_root_arg(lint_parser)
-    lint_parser.add_argument("paths", nargs="*", help="要檢查的檔案路徑（預設: <spec-root>/changes/*/proposal.md）")
+    lint_parser.add_argument("paths", nargs="*", help="要檢查的檔案路徑或 change-id（預設: <spec-root>/changes/*/proposal.md）")
     lint_parser.set_defaults(func=cmd_lint)
 
     next_parser = subparsers.add_parser("next", help="算出這個 change 下一步該做什麼（JSON 輸出）")
@@ -395,6 +466,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_spec_root_arg(transition_parser)
     transition_parser.add_argument("change", help="change-id 或實際路徑")
     transition_parser.add_argument("event", help="要觸發的事件，例如 LINT_PASS、DEV_DONE")
+    transition_parser.add_argument(
+        "--auto-commit",
+        action="store_true",
+        help="轉移成功後自動 git add/commit proposal.md，避免留下 dirty 工作區忘記 commit",
+    )
+    transition_parser.add_argument(
+        "--commit-ref",
+        default=None,
+        help="把這個 sha 記錄到 proposal.md frontmatter（implementation_commit），純紀錄用途，不做任何 git 操作",
+    )
     transition_parser.set_defaults(func=cmd_transition)
 
     root_parser = subparsers.add_parser("root", help="印出目前解析到的 --spec-root（除錯用）")
@@ -420,7 +501,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_spec_root_arg(prompt_parser)
     prompt_parser.add_argument("change", help="change-id 或實際路徑")
     prompt_parser.add_argument(
-        "--base", default="main", help="比較的基準 branch/ref（預設: main）"
+        "--base", default=None, help="比較的基準 branch/ref（預設：自動偵測 origin/HEAD → main → master）"
     )
     prompt_parser.set_defaults(func=cmd_prompt)
 
