@@ -1,0 +1,9 @@
+{
+  "name": "specflow-workflow",
+  "description": "教 Claude 完整的 specflow 工作流程——建立 change、判斷 type、走生命周期轉移、產生交付內容，全部用 specflow 指令的實際輸出當依據，不是憑印象猜規則。",
+  "version": "1.0.0",
+  "author": {
+    "name": "eric802222"
+  },
+  "homepage": "https://github.com/eric802222/specflow"
+}
