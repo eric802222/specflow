@@ -72,15 +72,18 @@ def resolve_spec_root(explicit: str = None) -> Path:
     """算出目標專案的 spec root。
 
     優先序：--spec-root > SPECFLOW_SPEC_ROOT 環境變數 > 目前目錄底下的 .spec/
-    （monorepo 模式）> 目前目錄本身（獨立 spec repo 模式）。最後一層一定成功，
-    不會因為找不到而報錯——目錄選錯了會在後續指令操作時給出更具體的錯誤
-    （例如「changes/ 底下沒有 proposal.md」），比在這裡就攔下來更有幫助。
+    （monorepo 模式）> 目前目錄本身（獨立 spec repo 模式）。
+
+    --spec-root 明確指定的路徑，不存在就直接建立——這是使用者主動選定的目標，
+    要求先手動 mkdir 才能用是反常識的設計（對照 `git init <dir>`：目錄不存在
+    就自己建，不會要求使用者先建好）。SPECFLOW_SPEC_ROOT 環境變數／fallback
+    到目前目錄則不自動建立：這兩種情況下使用者沒有明確表達「就是這裡」，
+    貿然建立目錄反而可能建錯地方。
     """
     if explicit:
         p = Path(explicit).expanduser().resolve()
         if not p.exists():
-            print(f"--spec-root 指定的路徑不存在：{p}", file=sys.stderr)
-            raise SystemExit(2)
+            p.mkdir(parents=True, exist_ok=True)
         return p
 
     env = os.environ.get(ENV_VAR)
@@ -136,6 +139,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     change_id = args.change_id
     title = args.title
     change_type = args.type
+
+    # 沒有明確指定 --spec-root、也沒有 SPECFLOW_SPEC_ROOT、附近也沒有既有
+    # .spec/ 時，resolve_spec_root 會靜默 fallback 到目前目錄本身——這代表
+    # changes/ 會直接建在專案根目錄，跟原始碼混在一起。這種情況給個提醒，
+    # 讓使用者至少知道發生了什麼，不是完全沒有察覺。
+    if not args.spec_root and not os.environ.get(ENV_VAR) and not (Path.cwd() / ".spec").is_dir():
+        print(
+            f"提示：沒有指定 --spec-root，也沒有找到既有 .spec/，"
+            f"change 將直接建立在 {spec_root}/changes/ 底下（跟原始碼同一層）。"
+            f"如果想要獨立的 .spec/ 目錄，改用 --spec-root .spec 重新執行。",
+            file=sys.stderr,
+        )
 
     if not CHANGE_ID_RE.match(change_id):
         print(
