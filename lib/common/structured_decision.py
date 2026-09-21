@@ -224,6 +224,17 @@ def _validate_entity(entity_body: str, num: str, status: str, schema: Structured
     return errors
 
 
+def find_pending(text: str, schema: StructuredSchema) -> list:
+    """回傳目前文件裡所有非 confirmed_status 的項目 (num, title) 清單，
+    不做完整格式驗證——只是給外部 gate（例如 REVIEW_PASS 要不要放行）用的
+    快速查詢。格式驗不驗證得過是 lint_structured_text 的事，這裡假設呼叫端
+    已經先確認過格式合法。"""
+    heading_re, *_ = _build_regexes(schema)
+    _fm_data, body, _error = fm.load_frontmatter_data(text)
+    entities = _find_entities(body, heading_re)
+    return [(num, title) for emoji, num, title, *_ in entities if emoji != schema.confirmed_status]
+
+
 def lint_structured_text(text: str, expected_change_id: str, schema: StructuredSchema, path: Path = None) -> LintResult:
     result = LintResult(path=path or Path("<memory>"))
     heading_re, field_line_re, summary_heading_re, summary_bullet_re, option_item_re = _build_regexes(schema)
