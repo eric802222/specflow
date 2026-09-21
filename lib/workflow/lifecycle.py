@@ -25,6 +25,7 @@ class Transition:
     auto: bool
     requires_type: str = None
     skip_target_check: bool = False
+    warn_if_no_specs_touch: bool = False
 
 
 class Lifecycle:
@@ -71,6 +72,7 @@ class Lifecycle:
                         auto=bool(spec.get("auto")),
                         requires_type=spec.get("requires_type"),
                         skip_target_check=bool(spec.get("skip_target_check")),
+                        warn_if_no_specs_touch=bool(spec.get("warn_if_no_specs_touch")),
                     )
                 )
             else:
