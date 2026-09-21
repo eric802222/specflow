@@ -260,3 +260,57 @@ def test_gate_check_rejects_hotfix_live_for_feature_type_via_transition_layer(tm
     lc = gate["lifecycle"]
     available = lc.available_transitions(gate["status"], gate["type"])
     assert "HOTFIX_LIVE" not in [t.event for t in available]
+
+
+VALID_DESIGN = """\
+---
+change: {change_id}
+---
+
+## ⏳ 待確認（0）
+
+## 決策 (Decisions)
+
+### ✅ D1 — 示範決策
+
+理由。
+"""
+
+INVALID_DESIGN = """\
+---
+change: {change_id}
+---
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 缺摘要的決策
+
+還沒定案，但檔案最上方沒有待確認摘要區塊。
+"""
+
+
+def test_gate_check_passes_when_design_md_absent(tmp_path):
+    """design.md 是可選檔案，不存在時完全不影響 gate_check。"""
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is True
+
+
+def test_gate_check_passes_when_design_md_valid(tmp_path):
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    change_id = change_dir.name
+    (change_dir / "design.md").write_text(VALID_DESIGN.format(change_id=change_id), encoding="utf-8")
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is True
+
+
+def test_gate_check_blocks_when_design_md_invalid(tmp_path):
+    """design.md 雖然是可選的，但只要它存在就必須合法——不會因為可選就放鬆檢查。"""
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    change_id = change_dir.name
+    (change_dir / "design.md").write_text(INVALID_DESIGN.format(change_id=change_id), encoding="utf-8")
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is False
+    assert gate["next_action"] == "fix_design_lint"
