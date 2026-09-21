@@ -97,3 +97,13 @@ def test_design_md_is_allowed(tmp_path):
 
     result = change_shape_lint.lint_dir(change_dir)
     assert result.ok, result.errors
+
+
+def test_review_md_is_allowed(tmp_path):
+    change_dir = tmp_path / "CP-153"
+    change_dir.mkdir()
+    (change_dir / "proposal.md").write_text("x", encoding="utf-8")
+    (change_dir / "review.md").write_text("x", encoding="utf-8")
+
+    result = change_shape_lint.lint_dir(change_dir)
+    assert result.ok, result.errors
