@@ -41,6 +41,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from lib.linters import proposal_lint  # noqa: E402
 from lib.linters import cross_spec_lint  # noqa: E402
+from lib.linters import review_lint  # noqa: E402
 from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.generators import prompt_gen  # noqa: E402
 from lib.generators import render_gen  # noqa: E402
@@ -257,6 +258,24 @@ def cmd_transition(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if t.requires_review_resolved:
+        review_path = change_dir / "review.md"
+        if review_path.exists():
+            pending = review_lint.find_pending(review_path)
+            if pending:
+                print(
+                    f"擋下轉移：review.md 還有 {len(pending)} 個待處理項目未結案，"
+                    "不能 REVIEW_PASS：",
+                    file=sys.stderr,
+                )
+                for num, title in pending:
+                    print(f"  - F{num}: {title}", file=sys.stderr)
+                print(
+                    "全部改成 ✅ 並填上處置結果後才能繼續，或用 REVIEW_REJECT 打回 respec。",
+                    file=sys.stderr,
+                )
+                return 1
 
     target = t.target
 
