@@ -2,5 +2,4 @@
 change: CP-XXXX-change-slug
 ---
 
-- [ ] task-id-one: 一句話描述這個任務 (touches: db/schema.dbml, api/main.tsp)
-- [ ] task-id-two: 一句話描述這個任務 (touches: ui/pages/example.wf.yaml)
+- [ ] replace-me: 刪掉這行，換成真正的第一個 task (touches: 實際會改到的檔案路徑)
