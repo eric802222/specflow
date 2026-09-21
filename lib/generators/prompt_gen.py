@@ -49,6 +49,43 @@ PROMPT_TEMPLATE = """\
 """
 
 
+def _resolve_base_ref(cwd: Path) -> str:
+    """依序嘗試 origin/HEAD → main → master → 目前 HEAD，回傳第一個真的存在的 ref。
+
+    這是真實踩過的坑：新 repo 預設分支是 master，寫死 main 會讓第一個要跑的指令
+    直接噴 `fatal: bad revision 'main'`——而且這是流程文件教人下的第一個指令，
+    第一步就紅字會讓人懷疑整套工具沒裝好。最後一層 fallback 是 HEAD，
+    一定會成功（diff 對自己永遠是空的，但至少不會讓指令崩潰）。
+    """
+    candidates = []
+    try:
+        result = subprocess.run(
+            ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+            cwd=str(cwd), capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip().rsplit("/", 1)[-1]
+            if branch:
+                candidates.append(f"origin/{branch}")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    candidates += ["main", "master"]
+
+    for ref in candidates:
+        try:
+            check = subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", ref],
+                cwd=str(cwd), capture_output=True, timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            break
+        if check.returncode == 0:
+            return ref
+
+    return "HEAD"
+
+
 def get_specs_diff(specs_dir: Path, base_ref: str = "HEAD") -> str:
     cwd = specs_dir if specs_dir.exists() else specs_dir.parent
     try:
@@ -77,7 +114,7 @@ def _read_tasks_section(tasks_path: Path) -> str:
     return body.strip() if body.strip() else "(tasks.md 是空的)"
 
 
-def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: str = "main") -> str:
+def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: str = None) -> str:
     proposal_path = change_dir / "proposal.md"
     text = proposal_path.read_text(encoding="utf-8")
     fm_data, body, _error = fm.load_frontmatter_data(text)
@@ -86,8 +123,9 @@ def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: st
     tasks_section = _read_tasks_section(change_dir / "tasks.md")
 
     specs_dir = spec_root / "specs"
-    analysis = diff_analyzer.analyze(specs_dir, base_ref)
-    diff = get_specs_diff(specs_dir, base_ref)
+    resolved_base_ref = base_ref if base_ref else _resolve_base_ref(specs_dir if specs_dir.exists() else spec_root)
+    analysis = diff_analyzer.analyze(specs_dir, resolved_base_ref)
+    diff = get_specs_diff(specs_dir, resolved_base_ref)
 
     return PROMPT_TEMPLATE.format(
         change_id=change_id,
@@ -95,7 +133,7 @@ def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: st
         proposal_body=body.strip(),
         tasks_section=tasks_section,
         blast_radius_summary=analysis["summary"],
-        base_ref=base_ref,
+        base_ref=resolved_base_ref,
         diff=diff if diff.strip() else "(specs/ 無變更——如果這不符合預期，檢查一下 --base 是否指對分支)",
     )
 
@@ -103,12 +141,12 @@ def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: st
 def main(argv=None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     if len(argv) < 2:
-        print("用法: prompt_gen.py <change-dir> <spec-root> [base_ref=main]", file=sys.stderr)
+        print("用法: prompt_gen.py <change-dir> <spec-root> [base_ref]", file=sys.stderr)
         return 2
 
     change_dir = Path(argv[0])
     spec_root = Path(argv[1])
-    base_ref = argv[2] if len(argv) > 2 else "main"
+    base_ref = argv[2] if len(argv) > 2 else None
 
     prompt = build_prompt(change_dir.name, change_dir, spec_root, base_ref)
     print(prompt)
