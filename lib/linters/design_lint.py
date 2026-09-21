@@ -1,17 +1,25 @@
 """design.md 的結構檢查（poka-yoke）。
 
-跟 proposal.md 不同，design.md 裝的是「為什麼」——每個工程決策的理由、取捨、
-備選方案考慮過程。這種內容天生需要比 proposal 的 35 行更多空間，所以這裡不對
-整份檔案設行數上限；但單一決策的說明還是有上限（逼你講重點，不是寫成一篇沒有
-結構的散文），而且每個決策都必須誠實標記狀態（✅ 已定案／⏳ 待確認／🚫 卡住），
-檔案最上方的「待確認」摘要清單跟內文標記互相交叉比對，兩邊對不上就是錯誤——
-避免摘要過期卻沒人發現（這正是我們一路在防的：兩份資料各自維護、彼此漂移）。
+跟 proposal.md 不同，design.md 裝的是「為什麼」——每個工程決策的觸發情境、
+最終選擇、換來的取捨。這種內容如果寫成自由段落，讀者要自己從句子裡拆解出
+「這是觸發原因」還是「這是最終決定」，心智負擔很重。所以這裡不是靠行數上限
+逼你精簡，是**格式本身不給你寫成段落的空間**：每個決策只能用固定的欄位
+（事件／決策／取捨），順序固定，不允許出現欄位以外的任何文字。
+
+檔案最上方的「待確認」摘要清單跟內文的狀態標記互相交叉比對，兩邊對不上就是
+錯誤——避免摘要過期卻沒人發現（這正是我們一路在防的：兩份資料各自維護、
+彼此漂移）。
 
 規則：
   1. Frontmatter 必須有 `change` 欄位，且值要等於外部傳入的 change_id
   2. 每個決策標題格式：`### <emoji> D<n> — <標題>`，emoji 只能是 ✅／⏳／🚫
   3. D 編號不得重複
-  4. 單一決策的內文不得超過 MAX_LINES_PER_DECISION 行
+  4. 決策內文只能是固定欄位，依序：
+       - **事件**：<觸發這個決策的情境／問題>          （必填）
+       - **決策**：<選了什麼>                          （必填）
+       - **取捨**：<放棄了什麼、換來什麼代價>           （可選）
+     順序不能顛倒，不能出現這三個欄位以外的任何文字，每個欄位值限單行、
+     不得超過 MAX_FIELD_LENGTH 字元（逼你精簡，不是拿一行硬塞一整段話）
   5. 嚴禁代碼塊標記（狀態圖這類內容該進 specs/logic/，不是塞在這裡）
   6. 只要有非 ✅ 的決策，檔案最上方必須有 `## ⏳ 待確認（N）` 摘要區塊，
      N 要等於非 ✅ 決策的數量，區塊底下列出的 D 編號要跟內文的非 ✅ 決策
@@ -33,17 +41,20 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from lib.common import frontmatter as fm  # noqa: E402
 
-MAX_LINES_PER_DECISION = 15
+MAX_FIELD_LENGTH = 200
 CODE_FENCE = "```"
 
 STATUS_CONFIRMED = "✅"
 STATUS_PENDING = "⏳"
 STATUS_BLOCKED = "🚫"
-VALID_STATUS_EMOJI = (STATUS_CONFIRMED, STATUS_PENDING, STATUS_BLOCKED)
+
+FIELD_ORDER = ("事件", "決策", "取捨")
+REQUIRED_FIELDS = ("事件", "決策")
 
 DECISION_HEADING_RE = re.compile(
     r"^### (?P<emoji>✅|⏳|🚫) D(?P<num>\d+) — (?P<title>.+?)\s*$", re.MULTILINE
 )
+FIELD_LINE_RE = re.compile(r"^-\s+\*\*(事件|決策|取捨)\*\*：\s*(.+)$")
 SUMMARY_HEADING_RE = re.compile(r"^## ⏳ 待確認（(?P<count>\d+)）\s*$", re.MULTILINE)
 SUMMARY_BULLET_RE = re.compile(r"^-\s+\*\*D(?P<num>\d+)\*\*\s+—", re.MULTILINE)
 
@@ -58,10 +69,6 @@ class LintResult:
         return not self.errors
 
 
-def _effective_line_count(text: str) -> int:
-    return sum(1 for line in text.splitlines() if line.strip())
-
-
 def _find_decisions(body: str):
     """回傳 [(emoji, num, title, decision_body_text, lineno), ...]，依出現順序。"""
     matches = list(DECISION_HEADING_RE.finditer(body))
@@ -73,6 +80,46 @@ def _find_decisions(body: str):
         lineno = body.count("\n", 0, m.start()) + 1
         decisions.append((m.group("emoji"), m.group("num"), m.group("title"), decision_body, lineno))
     return decisions
+
+
+def _validate_decision_fields(decision_body: str, num: str) -> list:
+    """驗證決策內文只用固定欄位、依序、無多餘文字。回傳錯誤訊息清單。"""
+    errors = []
+    seen_labels = []
+
+    for raw_line in decision_body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        m = FIELD_LINE_RE.match(line)
+        if not m:
+            errors.append(
+                f"D{num}：不合法的內容 '{line}'"
+                "（只能用 '- **事件**：...' / '- **決策**：...' / '- **取捨**：...' 三種欄位，不允許自由段落文字）"
+            )
+            continue
+
+        label, value = m.group(1), m.group(2)
+        if label in seen_labels:
+            errors.append(f"D{num}：欄位 '{label}' 重複")
+        seen_labels.append(label)
+
+        if len(value) > MAX_FIELD_LENGTH:
+            errors.append(f"D{num} 的 '{label}' 欄位長度為 {len(value)} 字元，超過上限 {MAX_FIELD_LENGTH}")
+
+    for required in REQUIRED_FIELDS:
+        if required not in seen_labels:
+            errors.append(f"D{num}：缺少必要欄位 '{required}'")
+
+    last_idx = -1
+    for label in seen_labels:
+        idx = FIELD_ORDER.index(label)
+        if idx < last_idx:
+            errors.append(f"D{num}：欄位順序錯誤，必須依序是 {' → '.join(FIELD_ORDER)}（'{label}' 出現在不對的位置）")
+        last_idx = idx
+
+    return errors
 
 
 def _find_summary(body: str):
@@ -117,11 +164,7 @@ def lint_text(text: str, expected_change_id: str, path: Path = None) -> LintResu
             result.errors.append(f"第 {lineno} 行：D{num} 編號重複")
         seen_nums.add(num)
 
-        line_count = _effective_line_count(decision_body)
-        if line_count > MAX_LINES_PER_DECISION:
-            result.errors.append(
-                f"D{num}（第 {lineno} 行）：內文有效非空行數為 {line_count}，超過單一決策上限 {MAX_LINES_PER_DECISION} 行"
-            )
+        result.errors.extend(_validate_decision_fields(decision_body, num))
 
     pending_nums = {num for emoji, num, *_ in decisions if emoji != STATUS_CONFIRMED}
     summary = _find_summary(body)
