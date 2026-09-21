@@ -38,15 +38,18 @@ PROMPT_TEMPLATE = """\
 {diff}
 
 ## 交付要求
-1. 只實作 diff 中涉及的規格變更，不擴大範圍（No Scope Creep）。
-2. 若 diff 修改了 db/schema.dbml，同步更新對應的 migration。
-3. 若 diff 修改了 api/main.tsp，重新編譯 OpenAPI 並更新對應的 handler/DTO。
-4. 若 diff 修改了 logic/rules/*.yaml，用該決策表的每一列作為單元測試案例。
-5. 每完成一個 task 就 commit 一次，訊息用 `<verb>({change_id}/<task-id>): <message>`
-   格式，<task-id> 必須對應上面 Tasks 清單裡的其中一項。
-6. 完成後列出你觸碰到的檔案清單，供人工比對 Impact Surface 與各 task 的
-   touches 是否吻合。
+{delivery_requirements}
 """
+
+# 只在 diff 真的動到對應層時才加進交付要求——之前這三條是無條件塞進每一次
+# `specflow prompt` 輸出，一個完全沒用 DBML/TypeSpec/決策表的專案，AI 讀到
+# 會困惑「這個專案哪來的 db/schema.dbml」。跟 #9／cross_spec_lint／render_gen
+# 是同一個病根：核心邏輯假設了 db/api/logic 三層 DSL 一定存在。
+CONDITIONAL_REQUIREMENTS = {
+    "db": "若 diff 修改了 db/schema.dbml，同步更新對應的 migration。",
+    "api": "若 diff 修改了 api/main.tsp，重新編譯 OpenAPI 並更新對應的 handler/DTO。",
+    "logic": "若 diff 修改了 logic/rules/*.yaml，用該決策表的每一列作為單元測試案例。",
+}
 
 
 def _resolve_base_ref(cwd: Path) -> str:
@@ -114,6 +117,23 @@ def _read_tasks_section(tasks_path: Path) -> str:
     return body.strip() if body.strip() else "(tasks.md 是空的)"
 
 
+def _build_delivery_requirements(change_id: str, buckets: dict) -> str:
+    """組出交付要求清單：固定項目 + 只在 diff 實際動到對應層時才出現的條件式指示。"""
+    items = ["只實作 diff 中涉及的規格變更，不擴大範圍（No Scope Creep）。"]
+
+    for layer, instruction in CONDITIONAL_REQUIREMENTS.items():
+        if buckets.get(layer):
+            items.append(instruction)
+
+    items.append(
+        f"每完成一個 task 就 commit 一次，訊息用 `<verb>({change_id}/<task-id>): <message>` "
+        "格式，<task-id> 必須對應上面 Tasks 清單裡的其中一項。"
+    )
+    items.append("完成後列出你觸碰到的檔案清單，供人工比對 Impact Surface 與各 task 的 touches 是否吻合。")
+
+    return "\n".join(f"{i}. {text}" for i, text in enumerate(items, start=1))
+
+
 def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: str = None) -> str:
     proposal_path = change_dir / "proposal.md"
     text = proposal_path.read_text(encoding="utf-8")
@@ -135,6 +155,7 @@ def build_prompt(change_id: str, change_dir: Path, spec_root: Path, base_ref: st
         blast_radius_summary=analysis["summary"],
         base_ref=resolved_base_ref,
         diff=diff if diff.strip() else "(specs/ 無變更——如果這不符合預期，檢查一下 --base 是否指對分支)",
+        delivery_requirements=_build_delivery_requirements(change_id, analysis["buckets"]),
     )
 
 
