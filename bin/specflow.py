@@ -22,7 +22,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
     specflow prompt <change-id-or-path> [--base main]  印出交付給 AI 的完整指令（純輸出，不落地成檔案）
     specflow coverage                            純資訊：glossary 實體的檢查覆蓋率（不會擋流程）
-    specflow render [--out dist]                 把 specs/ 渲染成靜態 HTML（目錄頁 + 各 DSL 內容）
+    specflow render [--out dist]                 把 specs/ 渲染成渲染後的產物（目錄頁 + 各 DSL 內容）
     specflow root                               印出目前解析到的 spec root（除錯用）
 """
 
@@ -325,15 +325,29 @@ def cmd_prompt(args: argparse.Namespace) -> int:
 
 
 def cmd_render(args: argparse.Namespace) -> int:
-    """把 specs/ 渲染成一組靜態 HTML（目錄頁 + 各 DSL 原始內容），方便在瀏覽器
-    查看——不重新解析每種 DSL 的語意，只是把散落的規格檔案彙整成可以點來點去
-    的入口頁。分類底下沒有檔案時目錄頁顯示「尚未建立」，不會因此報錯。
+    """把 specs/ 渲染成一組靜態 HTML（目錄頁 + 各 DSL 渲染後的產物），方便在瀏覽器
+    查看——優先呼叫該生態系公認的既有工具（dbml-renderer / tsp compile+Redoc /
+    wireframe-lofi），工具沒裝或渲染失敗時優雅退回顯示原始內容，並在頁面上印出
+    安裝指令，不會讓整個指令因為某一層渲染失敗就掛掉。
     """
     spec_root = resolve_spec_root(args.spec_root)
     out_dir = Path(args.out).resolve() if args.out else (spec_root / "dist")
 
     render_gen.render(spec_root, out_dir)
+
+    fallback_marker = "還沒渲染成產物"
+    total, fell_back = 0, 0
+    for html_path in out_dir.rglob("*.html"):
+        if html_path.name in ("index.html", "glossary.html"):
+            continue
+        total += 1
+        if fallback_marker in html_path.read_text(encoding="utf-8"):
+            fell_back += 1
+
     print(f"已產出：{(out_dir / 'index.html').resolve()}")
+    if total:
+        rendered = total - fell_back
+        print(f"渲染狀態：{rendered}/{total} 頁是真正的渲染產物，{fell_back} 頁因為工具沒裝退回顯示原始內容（頁面上有安裝指令）")
     return 0
 
 
@@ -394,7 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
     coverage_parser.set_defaults(func=cmd_coverage)
 
     render_parser = subparsers.add_parser(
-        "render", help="把 specs/ 渲染成一組靜態 HTML（目錄頁 + 各 DSL 內容），方便在瀏覽器查看"
+        "render", help="把 specs/ 渲染成一組渲染後的靜態 HTML（目錄頁 + 各 DSL 產物），方便在瀏覽器查看"
     )
     _add_spec_root_arg(render_parser)
     render_parser.add_argument("--out", default=None, help="輸出目錄（預設：<spec-root>/dist）")
