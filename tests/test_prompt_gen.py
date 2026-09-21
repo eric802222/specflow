@@ -107,3 +107,65 @@ def test_prompt_notes_when_tasks_missing(tmp_path):
 
     prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
     assert "尚未建立 tasks.md" in prompt
+
+
+def test_base_ref_auto_detects_master_when_not_specified(tmp_path):
+    """回歸測試：新 repo 預設分支常常是 master 不是 main，之前 base_ref 預設值
+    寫死 'main'，這種 repo 一律直接噴 'fatal: bad revision main'。現在不明確
+    傳 base_ref 時要能自動找到真正存在的預設分支。"""
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    _git(repo_dir, "init", "-q")
+    _git(repo_dir, "config", "user.email", "test@example.com")
+    _git(repo_dir, "config", "user.name", "test")
+
+    spec_root = repo_dir / ".spec"
+    specs_dir = spec_root / "specs"
+    (specs_dir / "db").mkdir(parents=True)
+    (specs_dir / "db" / "schema.dbml").write_text("Table x {}\n", encoding="utf-8")
+
+    change_dir = spec_root / "changes" / "CP-1"
+    change_dir.mkdir(parents=True)
+    (change_dir / "proposal.md").write_text(PROPOSAL, encoding="utf-8")
+
+    _git(repo_dir, "add", ".")
+    _git(repo_dir, "commit", "-q", "-m", "init")
+    _git(repo_dir, "branch", "-q", "-m", "master")  # 明確模擬預設分支是 master
+
+    # 不傳 base_ref（None），要能自動 fallback 到 master，而不是噴錯
+    prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref=None)
+    assert "base_ref" not in prompt  # 不該把變數名字面值漏出來
+    assert "相對於 master" in prompt
+
+
+def test_delivery_requirements_only_mention_layers_actually_touched(tmp_path):
+    """回歸測試（issue #14）：交付要求原本無條件塞進 db/api/logic 三條指示，
+    一個完全沒用某種 DSL 的專案，AI 讀到會困惑那些檔案哪來的。現在只有 diff
+    實際動到的層才會出現對應指示。"""
+    repo_dir, spec_root, change_dir = _init_repo_with_change(tmp_path)
+
+    _git(repo_dir, "checkout", "-q", "-b", "change/CP-1")
+    (spec_root / "specs" / "db" / "schema.dbml").write_text(
+        "Table x { reason_note text }\n", encoding="utf-8"
+    )
+    _git(repo_dir, "add", ".")
+    _git(repo_dir, "commit", "-q", "-m", "add reason_note")
+
+    prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
+
+    assert "若 diff 修改了 db/schema.dbml" in prompt  # 這次 diff 真的動了 db
+    assert "若 diff 修改了 api/main.tsp" not in prompt  # 沒動 api，不該出現
+    assert "若 diff 修改了 logic/rules" not in prompt  # 沒動 logic，不該出現
+    assert "只實作 diff 中涉及的規格變更" in prompt  # 固定項目仍然存在
+    assert "每完成一個 task 就 commit 一次" in prompt  # 固定項目仍然存在
+
+
+def test_delivery_requirements_omit_all_conditional_items_when_no_diff(tmp_path):
+    repo_dir, spec_root, change_dir = _init_repo_with_change(tmp_path)
+
+    prompt = prompt_gen.build_prompt("CP-1", change_dir, spec_root, base_ref="main")
+
+    assert "若 diff 修改了 db/schema.dbml" not in prompt
+    assert "若 diff 修改了 api/main.tsp" not in prompt
+    assert "若 diff 修改了 logic/rules" not in prompt
+    assert "只實作 diff 中涉及的規格變更" in prompt
