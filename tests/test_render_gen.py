@@ -1,9 +1,8 @@
-"""render_gen 的單元測試：真正渲染 vs 退回原始內容，brownfield 空分類。
+"""render_gen 的單元測試：真正渲染 vs 退回原始內容、dsl.yaml 覆寫、brownfield 空分類。
 
-所有測試預設（autouse fixture）把三個外部工具呼叫（dbml-renderer / tsp compile /
-wireframe-lofi）都模擬成「沒裝」，讓測試不依賴這台機器有沒有 Node.js、網路、
-或 wireframe-lofi ——需要驗證「工具真的有裝」那條路徑的測試，個別用 monkeypatch
-覆寫回「有裝」。
+所有測試預設（autouse fixture）把外部工具呼叫都模擬成「沒裝」，讓測試不依賴
+這台機器有沒有 Node.js、網路、或 wireframe-lofi——需要驗證「工具真的有裝」
+那條路徑的測試，個別用 monkeypatch 覆寫回「有裝」。
 """
 
 import sys
@@ -39,12 +38,12 @@ rules:
 @pytest.fixture(autouse=True)
 def _no_external_tools_by_default(monkeypatch):
     """預設模擬所有外部工具都沒裝，測試才不依賴這台機器的環境。"""
-    monkeypatch.setattr(render_gen, "_try_render_dbml", lambda src, out: False)
+    monkeypatch.setattr(render_gen, "_try_render_command", lambda cmd, src, out=None, timeout=90: False)
     monkeypatch.setattr(render_gen, "_try_render_typespec", lambda src: None)
     monkeypatch.setattr(render_gen, "_find_wireframe_lofi_script", lambda: None)
 
 
-def _make_spec_root(tmp_path, with_glossary=True, with_db=True, with_ui_nested=False):
+def _make_spec_root(tmp_path, with_glossary=True, with_db=True, with_ui_nested=False, dsl_yaml=None):
     spec_root = tmp_path / ".spec"
     specs_dir = spec_root / "specs"
     specs_dir.mkdir(parents=True)
@@ -68,6 +67,9 @@ def _make_spec_root(tmp_path, with_glossary=True, with_db=True, with_ui_nested=F
 
     (specs_dir / "logic" / "rules").mkdir(parents=True)
     (specs_dir / "logic" / "rules" / "deal-approval.yaml").write_text(LOGIC, encoding="utf-8")
+
+    if dsl_yaml is not None:
+        (spec_root / "dsl.yaml").write_text(dsl_yaml, encoding="utf-8")
 
     return spec_root
 
@@ -132,7 +134,7 @@ def test_index_links_are_all_valid_relative_paths(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DB：dbml-renderer 有裝 vs 沒裝
+# DB：外部工具有裝 vs 沒裝
 # ---------------------------------------------------------------------------
 
 def test_db_falls_back_to_raw_content_with_install_note(tmp_path):
@@ -148,11 +150,11 @@ def test_db_falls_back_to_raw_content_with_install_note(tmp_path):
 
 
 def test_db_uses_real_render_when_tool_available(tmp_path, monkeypatch):
-    def fake_dbml_render(src, out_svg):
-        out_svg.write_text("<svg>fake ER diagram</svg>", encoding="utf-8")
+    def fake_render(cmd, src, out=None, timeout=90):
+        out.write_text("<svg>fake ER diagram</svg>", encoding="utf-8")
         return True
 
-    monkeypatch.setattr(render_gen, "_try_render_dbml", fake_dbml_render)
+    monkeypatch.setattr(render_gen, "_try_render_command", fake_render)
 
     spec_root = _make_spec_root(tmp_path)
     out_dir = tmp_path / "dist"
@@ -162,6 +164,64 @@ def test_db_uses_real_render_when_tool_available(tmp_path, monkeypatch):
     assert "還沒渲染成產物" not in html
     assert '<img src="schema.svg"' in html
     assert (out_dir / "db" / "schema.svg").exists()
+
+
+# ---------------------------------------------------------------------------
+# dsl.yaml：pattern / render_command / install_note 都可以被覆寫
+# ---------------------------------------------------------------------------
+
+def test_dsl_yaml_overrides_db_pattern(tmp_path):
+    """dsl.yaml 把 db 的 pattern 換成 *.prisma，原本的 .dbml 檔就不會被掃到，
+    換成一個新的 .prisma 檔案要能被抓到——證明 core 沒有寫死「db 一定是 DBML」。"""
+    dsl_yaml = "db:\n  pattern: '*.prisma'\n"
+    spec_root = _make_spec_root(tmp_path, dsl_yaml=dsl_yaml)
+    (spec_root / "specs" / "db" / "schema.prisma").write_text("model Deal {}\n", encoding="utf-8")
+
+    out_dir = tmp_path / "dist"
+    index = render_gen.render(spec_root, out_dir)
+
+    assert index["db"] == ["db/schema.prisma".replace(".prisma", ".html")]
+    assert (out_dir / "db" / "schema.html").exists()
+    assert not (out_dir / "db" / "schema-2.html").exists()  # 原本的 .dbml 沒被掃到（不存在對應輸出）
+
+
+def test_dsl_yaml_overrides_install_note(tmp_path):
+    dsl_yaml = "db:\n  install_note: '改用內部工具：internal-db-render --in {src}'\n"
+    spec_root = _make_spec_root(tmp_path, dsl_yaml=dsl_yaml)
+    out_dir = tmp_path / "dist"
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "db" / "schema.html").read_text(encoding="utf-8")
+    assert "internal-db-render" in html
+    assert "dbml-renderer" not in html  # 預設的安裝說明被換掉了
+
+
+def test_dsl_yaml_overrides_render_command(tmp_path, monkeypatch):
+    """render_command 被覆寫成別的工具時，_try_render_command 真的會拿到
+    覆寫後的樣板，不是預設的 dbml-renderer 呼叫方式。"""
+    captured = {}
+
+    def fake_render(cmd, src, out=None, timeout=90):
+        captured["cmd"] = cmd
+        return False
+
+    monkeypatch.setattr(render_gen, "_try_render_command", fake_render)
+
+    dsl_yaml = "db:\n  render_command: ['my-tool', '--input', '{src}', '--output', '{out}']\n"
+    spec_root = _make_spec_root(tmp_path, dsl_yaml=dsl_yaml)
+    render_gen.render(spec_root, tmp_path / "dist")
+
+    assert captured["cmd"] == ["my-tool", "--input", "{src}", "--output", "{out}"]
+
+
+def test_no_dsl_yaml_uses_bundled_defaults(tmp_path):
+    """沒有 dsl.yaml 時，load_dsl_config 回傳的就是內建預設值，不會意外變空。"""
+    spec_root = _make_spec_root(tmp_path)
+    config = render_gen.load_dsl_config(spec_root)
+
+    assert config["db"]["pattern"] == "*.dbml"
+    assert config["ui"]["pattern"] == "*.wf.yaml"
+    assert "dbml-renderer" in config["db"]["install_note"]
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +270,16 @@ def test_ui_falls_back_to_raw_content_with_install_note(tmp_path):
 
 def test_ui_uses_wireframe_lofi_when_available(tmp_path, monkeypatch):
     monkeypatch.setattr(render_gen, "_find_wireframe_lofi_script", lambda: Path("/fake/wfyaml.py"))
-    monkeypatch.setattr(
-        render_gen,
-        "_try_render_wireframe",
-        lambda script, src, ui_root: "<html><body><h1>rendered wireframe here</h1></body></html>",
-    )
+
+    def fake_run(cmd, cwd=None, timeout=90):
+        # 模擬 wfyaml.py 真的產生了輸出檔案
+        target = Path(cmd[-1])
+        target.parent.joinpath(target.name[: -len(".wf.yaml")] + ".html").write_text(
+            "<html><body><h1>rendered wireframe here</h1></body></html>", encoding="utf-8"
+        )
+        return object()
+
+    monkeypatch.setattr(render_gen, "_run", fake_run)
 
     spec_root = _make_spec_root(tmp_path)
     out_dir = tmp_path / "dist"
@@ -224,6 +289,31 @@ def test_ui_uses_wireframe_lofi_when_available(tmp_path, monkeypatch):
     assert "還沒渲染成產物" not in html
     assert "rendered wireframe here" in html
     assert "目錄" in html  # 有被插入回目錄的連結
+
+
+def test_dsl_yaml_overrides_ui_render_command(tmp_path, monkeypatch):
+    """ui.render_command 被覆寫時，走的是通用 command 樣板路徑，不是內建的
+    wireframe-lofi 探索邏輯——證明 ui 這層真的可以換成別的工具，不是寫死。"""
+    def fake_run(cmd, cwd=None, timeout=90):
+        assert cmd[0] == "my-other-wireframe-tool"
+        target = Path(cmd[1])
+        target.parent.joinpath(target.name[: -len(".wf.yaml")] + ".html").write_text(
+            "<html><body><h1>from another tool</h1></body></html>", encoding="utf-8"
+        )
+        return object()
+
+    monkeypatch.setattr(render_gen, "_run", fake_run)
+    # 這條測試要驗證「不去找 wireframe-lofi」，所以故意讓探索邏輯回傳有找到，
+    # 確認即使找得到，只要 render_command 有值就不會用內建邏輯。
+    monkeypatch.setattr(render_gen, "_find_wireframe_lofi_script", lambda: Path("/should/not/be/used.py"))
+
+    dsl_yaml = "ui:\n  render_command: ['my-other-wireframe-tool', '{src}']\n"
+    spec_root = _make_spec_root(tmp_path, dsl_yaml=dsl_yaml)
+    out_dir = tmp_path / "dist"
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "ui" / "deal-detail.html").read_text(encoding="utf-8")
+    assert "from another tool" in html
 
 
 # ---------------------------------------------------------------------------
