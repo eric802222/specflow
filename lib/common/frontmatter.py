@@ -60,13 +60,15 @@ def read_frontmatter(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def write_frontmatter_field(path: Path, key: str, value) -> None:
+def write_frontmatter_field(path: Path, key: str, value, create_if_missing: bool = False) -> None:
     """就地替換 frontmatter 裡「單一個」純量欄位的值，其他任何一行都不動。
 
     刻意只支援替換形如 `key: value` 的單行純量欄位；key 必須已經存在於
-    frontmatter 裡，否則拋例外。不對整份 frontmatter 重新序列化——那樣會連
-    引號、縮排風格都被 YAML dumper 重新排版，讓 git diff 在只改一個欄位時
-    卻顯示整段 frontmatter 都變了，違背「Diff 即交付」希望 diff 保持乾淨的初衷。
+    frontmatter 裡，否則拋例外——除非 create_if_missing=True，這時欄位不存在
+    就直接在 frontmatter 區塊尾端新增一行（也只新增這一行，不重新序列化整份，
+    理由跟替換邏輯一樣：不希望 git diff 因為寫入一個新欄位就把整段 frontmatter
+    的引號、縮排風格都跟著重排）。這是給像 implementation_commit 這種選填、
+    一開始不會出現在範本裡的欄位用的。
     """
     text = path.read_text(encoding="utf-8")
     fm_text, _ = split_frontmatter(text)
@@ -75,11 +77,15 @@ def write_frontmatter_field(path: Path, key: str, value) -> None:
 
     field_re = re.compile(rf"^({re.escape(key)}:)([ \t]*)(.*)$", re.MULTILINE)
     m = field_re.search(fm_text)
-    if not m:
-        raise ValueError(f"{path} 的 frontmatter 找不到欄位：{key}")
-
     new_value_str = _format_scalar(value)
-    new_fm_text = fm_text[: m.start()] + f"{key}: {new_value_str}" + fm_text[m.end():]
+
+    if m:
+        new_fm_text = fm_text[: m.start()] + f"{key}: {new_value_str}" + fm_text[m.end():]
+    elif create_if_missing:
+        sep = "" if fm_text.endswith("\n") else "\n"
+        new_fm_text = fm_text + sep + f"{key}: {new_value_str}\n"
+    else:
+        raise ValueError(f"{path} 的 frontmatter 找不到欄位：{key}")
 
     matches = list(_DELIM_RE.finditer(text))
     first, second = matches[0], matches[1]
