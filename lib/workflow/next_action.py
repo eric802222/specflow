@@ -26,7 +26,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from lib.linters import change_shape_lint, design_lint, proposal_lint, task_lint  # noqa: E402
+from lib.linters import change_shape_lint, design_lint, proposal_lint, review_lint, task_lint  # noqa: E402
 from lib.workflow import lifecycle as lifecycle_mod  # noqa: E402
 
 
@@ -58,15 +58,14 @@ def _target_ok(change_dir: Path, lc, transition) -> bool:
 
 
 def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
-    """跑完白名單 → proposal_lint → status 合法性 → （視狀態需要）task_lint →
-    （若存在）design_lint。
+    """跑完白名單 → proposal_lint → status 合法性 → （視狀態需要）task_lint。
 
     回傳的 dict 一定有 change_id / status / type / lifecycle / ok / next_action /
     blocking_errors 這幾個 key（type 要在 proposal_lint 過關後才讀得到，失敗在
     白名單那關的話沒有 type key）。ok=False 時 next_action 是失敗原因的代號
     （fix_change_shape / fix_proposal_lint / fix_proposal_status /
-    write_tasks_md / fix_task_lint / fix_design_lint），呼叫端可以直接用來擋下
-    操作或印訊息。
+    write_tasks_md / fix_task_lint / fix_design_lint / fix_review_lint），
+    呼叫端可以直接用來擋下操作或印訊息。
     """
     change_id = change_dir.name
     lc = lifecycle_mod.load_lifecycle(lifecycle_path)
@@ -122,9 +121,10 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
             "blocking_errors": errors,
         }
 
-    # design.md 是可選檔案（不像 tasks.md 那樣被任何狀態要求存在），但只要
-    # 它存在，就必須合法——不會因為「反正是可選的」就放鬆檢查，不然待確認
-    # 摘要漂移這種問題會悄悄溜過去。
+    # design.md／review.md 都是可選檔案（不像 tasks.md 那樣被任何狀態要求存在），
+    # 但只要存在就必須合法——不會因為「反正是可選的」就放鬆檢查，不然待確認
+    # 摘要漂移這種問題會悄悄溜過去。兩者共用同一套核心（structured_decision.py），
+    # 這裡的檢查邏輯刻意寫成一樣的形狀。
     design_path = change_dir / "design.md"
     if design_path.exists():
         d_result = design_lint.lint_file(design_path, expected_change_id=change_id)
@@ -137,6 +137,20 @@ def gate_check(change_dir: Path, lifecycle_path: Path = None) -> dict:
                 "ok": False,
                 "next_action": "fix_design_lint",
                 "blocking_errors": d_result.errors,
+            }
+
+    review_path = change_dir / "review.md"
+    if review_path.exists():
+        r_result = review_lint.lint_file(review_path, expected_change_id=change_id)
+        if not r_result.ok:
+            return {
+                "change_id": change_id,
+                "status": status,
+                "type": proposal_type,
+                "lifecycle": lc,
+                "ok": False,
+                "next_action": "fix_review_lint",
+                "blocking_errors": r_result.errors,
             }
 
     return {
