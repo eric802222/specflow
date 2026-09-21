@@ -19,12 +19,15 @@ def test_explicit_spec_root_wins(tmp_path, monkeypatch):
     assert result == explicit_dir.resolve()
 
 
-def test_explicit_nonexistent_path_errors(tmp_path):
-    try:
-        cli.resolve_spec_root(str(tmp_path / "does-not-exist"))
-        assert False, "應該要 raise SystemExit"
-    except SystemExit as e:
-        assert e.code == 2
+def test_explicit_nonexistent_path_gets_created(tmp_path):
+    """回歸測試（issue #12）：--spec-root 明確指定的路徑不存在時，之前是直接
+    SystemExit 報錯——這逼使用者第一次匯入專案時要先手動 mkdir 才能跑第一個
+    指令，跟 `git init <dir>` 目錄不存在就自己建的慣例不一致。現在應該直接
+    建立，不用使用者自己先準備好。"""
+    target = tmp_path / "does-not-exist" / "nested"
+    result = cli.resolve_spec_root(str(target))
+    assert result == target.resolve()
+    assert target.is_dir()
 
 
 def test_env_var_used_when_no_explicit(tmp_path, monkeypatch):
