@@ -16,7 +16,8 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
 可以客製化自己的流程，不用被綁死在同一套五段式狀態機上。
 
 支援：
-    specflow init <change-id> <title> [--type ...] [--with-design]  建立 proposal.md（可選 design.md/tasks.md）
+    specflow init <change-id> <title> [--type ...] [--with-design]  建立 proposal.md（可選 design.md/tasks.md），
+                                                     對既有 change 加 --with-design 可事後補 design.md
     specflow lint [paths-or-change-id]          對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event> [--auto-commit] [--commit-ref sha]  套用一次合法的狀態轉移
@@ -167,8 +168,28 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     change_dir = spec_root / "changes" / change_id
     if change_dir.exists():
-        print(f"change 已存在，不覆寫：{change_dir}", file=sys.stderr)
-        return 1
+        # change 已經存在——只有 --with-design 才放行，用來幫一個已經在跑的
+        # change 事後補一份 design.md（做到一半才發現「這個決策該記下來」是
+        # 很常見的情境，之前完全沒有 CLI 支援，只能求助文件或翻原始碼找範本
+        # 放在哪）。design.md 已經存在時仍然拒絕覆寫，維持原本的保護。
+        if not args.with_design:
+            print(f"change 已存在，不覆寫：{change_dir}", file=sys.stderr)
+            return 1
+
+        design_path = change_dir / "design.md"
+        if design_path.exists():
+            print(f"design.md 已存在，不覆寫：{design_path}", file=sys.stderr)
+            return 1
+        if not (change_dir / "proposal.md").exists():
+            print(f"{change_dir} 底下沒有 proposal.md，這不是一個正常的 change 目錄", file=sys.stderr)
+            return 1
+
+        design_template_path = REPO_ROOT / "templates" / "design.template.md"
+        design_text = design_template_path.read_text(encoding="utf-8")
+        design_text = design_text.replace("change: CP-XXXX-change-slug", f"change: {change_id}", 1)
+        atomic_write_text(design_path, design_text)
+        print(f"已幫既有 change 補上 design.md：{design_path}")
+        return 0
 
     text = template_path.read_text(encoding="utf-8")
     if ID_MARKER not in text or TITLE_MARKER not in text:
@@ -472,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="建立填空用 Proposal")
     _add_spec_root_arg(init_parser)
     init_parser.add_argument("change_id", help="change 的唯一識別碼，同時是資料夾名稱，例如 CP-153-discount-reason")
-    init_parser.add_argument("title", help="Proposal 標題")
+    init_parser.add_argument("title", help="Proposal 標題（對既有 change 補 --with-design 時此欄位會被忽略）")
     init_parser.add_argument(
         "--type",
         choices=["feature", "bugfix", "hotfix", "baseline"],
@@ -482,7 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--with-design",
         action="store_true",
-        help="同時建立 design.md（裝技術決策與取捨，proposal.md 的行數限制不適用）",
+        help="同時建立 design.md；對已存在的 change 使用時，會幫它補一份 design.md（不覆寫既有的）",
     )
     init_parser.set_defaults(func=cmd_init)
 
