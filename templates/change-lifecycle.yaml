@@ -9,7 +9,7 @@
 #
 # `requires_type`（可選）：這個轉移只有 proposal.md 的 type 欄位符合才合法。
 # HOTFIX_LIVE 用來讓緊急變更繞過正常審核直接上線，但這件事本身必須誠實標記
-# type: hotfix 才能觸發，不能隨便找個捷徑拄。BASELINE_CAPTURED 用來讓「描述
+# type: hotfix 才能觸發，不能隨便找個捷徑抄。BASELINE_CAPTURED 用來讓「描述
 # 既有系統現況」的 baseline change 直接進終點，不用走完整的開發生命週期——
 # 接手一個沒有規格的既有專案時，逼每一筆現況記錄都跑過 delivered/ready 這種
 # 為「開發變更」設計的中間狀態，只會增加不必要的摩擦力。
@@ -18,14 +18,22 @@
 # 的目標狀態是否已經滿足自己的前提（例如 requires_tasks），不合法就直接擋下
 # 轉移——這是刻意設計，避免合法操作把 change 送進一個立刻違反自身 invariant
 # 的狀態。但 HOTFIX_LIVE 是唯一的例外：它的整個存在意義就是「先宣告上線、
-# 事後才補 tasks.md（驗屩報告）」，如果連這個轉移都要求進入前先有 tasks.md，
+# 事後才補 tasks.md（驗屍報告）」，如果連這個轉移都要求進入前先有 tasks.md，
 # 緊急通道就沒有意義了。所以只有這條轉移標記 skip_target_check: true，
 # 目標狀態 live_pending_review 自己的 requires_tasks 仍然生效——只是不會在
 # 「進入」的當下就被擋，而是在「想離開」live_pending_review 時才會被要求。
 #
 # `allows`（可選）：這個狀態允許哪些 command capability（例如 generate_delivery）。
 # CLI 指令查這裡決定能不能跑，不要自己在程式碼裡 hard-code「delivered 才能產生
-# 交付內容」這種規則——那樣散在各處的規則會跟 lifecycle 定義的漸漸分岐。
+# 交付內容」這種規則——那樣散在各處的規則會跟 lifecycle 定義的漸漸分岔。
+#
+# `warn_if_no_specs_touch`（可選）：轉移成功後，檢查 proposal.md 的 impact_surface
+# 有沒有任何一項落在 specs/ 底下，沒有就印提醒（不擋流程，純資訊）。只標在
+# MERGED 這條轉移上——這是真實踩過的坑：applied 狀態的說明寫著「已併入 specs/」，
+# 但沒有任何機制檢查這件事真的發生過，一個 change 可以整條生命週期走完、
+# 知識卻完全沒有沉澱到 specs/，變成一份死文件。這裡刻意只做「提醒」不做「硬擋」：
+# 不是每個 change 都該動 specs/（單純的 hotfix、內部重構完全可能不涉及任何
+# 已記錄的規則），硬性要求會是在為了單一情境犧牲通用性。
 
 id: change_lifecycle
 initial: draft
@@ -71,19 +79,36 @@ states:
         auto: true
 
   ready:
-    description: 開發完成，等待 MR 審查通過並 merge
+    description: >-
+      開發完成，等待 code review。REVIEW_PASS 才能進 merge_ready；review 發現
+      規格需要調整就 REVIEW_REJECT 打回 respec——DEV_DONE 到這裡之前完全是
+      榮譽制，沒有任何檢查驗證「實作是否真的做了」，這個關卡至少讓「有沒有人
+      看過」變成流程裡看得到的一步，不是純靠口頭約定。
+    requires_tasks: true
+    allows: [generate_delivery]
+    "on":
+      REVIEW_PASS:
+        target: merge_ready
+        auto: false
+      REVIEW_REJECT:
+        target: respec
+        auto: false
+
+  merge_ready:
+    description: 已通過 review，等待實際 merge
     requires_tasks: true
     allows: [generate_delivery]
     "on":
       MERGED:
         target: applied
         auto: false
+        warn_if_no_specs_touch: true
 
   live_pending_review:
     description: >-
       緊急變更已經上線，事後審查（Post-Implementation Review）尚未補交。
       仿 ITIL Emergency Change：跳過事前審核換取速度，但事後一定要補一份
-      記錄，不會因為「火滴了」就不了了之。
+      記錄，不會因為「火滅了」就不了了之。
     requires_tasks: true
     allows: [edit_tasks]
     "on":
