@@ -222,3 +222,66 @@ def test_init_with_bugfix_type_uses_lean_template(tmp_path):
     assert exit_code == 0
     assert "type: bugfix" in text
     assert "## 壞在哪 (Symptom)" in text
+
+
+# ---------------------------------------------------------------------------
+# --with-design 事後幫既有 change 補 design.md（issue #15）
+# ---------------------------------------------------------------------------
+
+def test_with_design_adds_design_md_to_existing_change(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+    parser = cli.build_parser()
+
+    args1 = parser.parse_args(["init", "--spec-root", str(spec_root), "CP-1", "標題", "--type", "bugfix"])
+    assert args1.func(args1) == 0
+    assert not (spec_root / "changes" / "CP-1" / "design.md").exists()
+
+    # 事後才發現這個決策該記下來，補一份 design.md 進去
+    args2 = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-1", "隨便填", "--with-design"]
+    )
+    exit_code = args2.func(args2)
+
+    design_path = spec_root / "changes" / "CP-1" / "design.md"
+    assert exit_code == 0
+    assert design_path.exists()
+    assert "change: CP-1" in design_path.read_text(encoding="utf-8")
+    # 原本的 proposal.md 不該被動到
+    assert "type: bugfix" in (spec_root / "changes" / "CP-1" / "proposal.md").read_text(encoding="utf-8")
+
+
+def test_with_design_refuses_to_overwrite_existing_design_md(tmp_path):
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+    parser = cli.build_parser()
+
+    args1 = parser.parse_args(
+        ["init", "--spec-root", str(spec_root), "CP-1", "標題", "--type", "bugfix", "--with-design"]
+    )
+    assert args1.func(args1) == 0
+    design_path = spec_root / "changes" / "CP-1" / "design.md"
+    design_path.write_text("change: CP-1\n---\n有內容了", encoding="utf-8")
+
+    args2 = parser.parse_args(["init", "--spec-root", str(spec_root), "CP-1", "隨便", "--with-design"])
+    exit_code = args2.func(args2)
+
+    assert exit_code == 1
+    assert design_path.read_text(encoding="utf-8") == "change: CP-1\n---\n有內容了"  # 沒被蓋掉
+
+
+def test_init_without_with_design_still_refuses_existing_change(tmp_path):
+    """回歸測試：確認這次的改動沒有意外放寬「change 已存在不覆寫」這條保護——
+    只有明確傳 --with-design 才走補件路徑，其他情況維持原本行為。"""
+    spec_root = tmp_path / ".spec"
+    spec_root.mkdir()
+    parser = cli.build_parser()
+
+    args1 = parser.parse_args(["init", "--spec-root", str(spec_root), "CP-1", "標題"])
+    assert args1.func(args1) == 0
+
+    args2 = parser.parse_args(["init", "--spec-root", str(spec_root), "CP-1", "又建一次"])
+    exit_code = args2.func(args2)
+
+    assert exit_code == 1
+    assert not (spec_root / "changes" / "CP-1" / "design.md").exists()
