@@ -22,6 +22,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
     specflow transition <change-id-or-path> <event>   套用一次合法的狀態轉移
     specflow prompt <change-id-or-path> [--base main]  印出交付給 AI 的完整指令（純輸出，不落地成檔案）
     specflow coverage                            純資訊：glossary 實體的檢查覆蓋率（不會擋流程）
+    specflow render [--out dist]                 把 specs/ 渲染成靜態 HTML（目錄頁 + 各 DSL 內容）
     specflow root                               印出目前解析到的 spec root（除錯用）
 """
 
@@ -41,6 +42,7 @@ from lib.linters import proposal_lint  # noqa: E402
 from lib.linters import cross_spec_lint  # noqa: E402
 from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.generators import prompt_gen  # noqa: E402
+from lib.generators import render_gen  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
 
 TEMPLATE_PATHS = {
@@ -55,7 +57,7 @@ ID_MARKER = "id: PROP-XXXX"
 TITLE_MARKER = 'title: "<一句話描述>"'
 
 # change_id 直接被拼進路徑（spec_root / "changes" / change_id），所以必須限制字元集：
-# 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、"..", "-foo" 這類會讓人誤讀的開頭）。
+# 不能有路徑分隔符號、不能以非英數字元開頭（擋掉 "."、".."、"-foo" 這類會讓人誤讀的開頭）。
 CHANGE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 
 
@@ -322,6 +324,19 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render(args: argparse.Namespace) -> int:
+    """把 specs/ 渲染成一組靜態 HTML（目錄頁 + 各 DSL 原始內容），方便在瀏覽器
+    查看——不重新解析每種 DSL 的語意，只是把散落的規格檔案彙整成可以點來點去
+    的入口頁。分類底下沒有檔案時目錄頁顯示「尚未建立」，不會因此報錯。
+    """
+    spec_root = resolve_spec_root(args.spec_root)
+    out_dir = Path(args.out).resolve() if args.out else (spec_root / "dist")
+
+    render_gen.render(spec_root, out_dir)
+    print(f"已產出：{(out_dir / 'index.html').resolve()}")
+    return 0
+
+
 def _add_spec_root_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--spec-root",
@@ -377,6 +392,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_spec_root_arg(coverage_parser)
     coverage_parser.set_defaults(func=cmd_coverage)
+
+    render_parser = subparsers.add_parser(
+        "render", help="把 specs/ 渲染成一組靜態 HTML（目錄頁 + 各 DSL 內容），方便在瀏覽器查看"
+    )
+    _add_spec_root_arg(render_parser)
+    render_parser.add_argument("--out", default=None, help="輸出目錄（預設：<spec-root>/dist）")
+    render_parser.set_defaults(func=cmd_render)
 
     prompt_parser = subparsers.add_parser(
         "prompt", help="給一個 change-id，印出交付給 AI 的完整指令（純輸出，不落地成檔案）"
