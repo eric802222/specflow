@@ -1,6 +1,6 @@
 """這輪修復的端到端測試：init 自動產 tasks.md、lint 吃 change-id、
 transition 的 --auto-commit / --commit-ref、REVIEW_PASS/REVIEW_REJECT 完整路徑、
-warn_if_no_specs_touch 提醒。"""
+warn_if_no_specs_touch 提醒、REVIEW_PASS 真正檢查 review.md 有沒有待處理項目。"""
 
 import subprocess
 import sys
@@ -223,3 +223,90 @@ def test_merged_no_warning_when_impact_surface_has_specs_path(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "沒有任何一項落在 specs/ 底下" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# REVIEW_PASS 真正檢查 review.md 有沒有還沒結案的項目（issue #11）
+# ---------------------------------------------------------------------------
+
+REVIEW_WITH_PENDING = """\
+---
+change: CP-1
+---
+
+## 🔴 待處理（1）
+
+- **F1** — status 比對用字串常數，沒有集中定義
+
+## Review 發現 (Findings)
+
+### ⏳ F1 — status 比對用字串常數，沒有集中定義
+
+- **位置**：src/api/roster_api.py
+- **問題**：字串各自手打，容易打錯字
+- **選項**：
+  - [ ] 拉一個常數類別集中管理
+  - [ ] 這次不動，開新 change 處理
+  - [ ] 其他補充：
+"""
+
+REVIEW_ALL_RESOLVED = """\
+---
+change: CP-1
+---
+
+## 🔴 待處理（0）
+
+## Review 發現 (Findings)
+
+### ✅ F1 — status 比對用字串常數，沒有集中定義
+
+- **位置**：src/api/roster_api.py
+- **問題**：字串各自手打，容易打錯字
+- **處置**：這次不動，開 CP-2 另外處理
+"""
+
+
+def _make_ready_change_with_review(tmp_path, review_text):
+    spec_root = tmp_path / ".spec"
+    change_dir = spec_root / "changes" / "CP-1"
+    change_dir.mkdir(parents=True)
+    (change_dir / "proposal.md").write_text(VALID_PROPOSAL.format(status="ready"), encoding="utf-8")
+    (change_dir / "tasks.md").write_text(VALID_TASKS, encoding="utf-8")
+    (change_dir / "review.md").write_text(review_text, encoding="utf-8")
+    return spec_root, change_dir
+
+
+def test_review_pass_blocked_when_review_has_pending_findings(tmp_path, capsys):
+    """回歸測試（issue #11）：review.md 明明還有 ⏳ 待處理項目，REVIEW_PASS
+    之前是直接放行的——這等於整套 review.md 機制形同虛設。現在必須被擋下。"""
+    spec_root, change_dir = _make_ready_change_with_review(tmp_path, REVIEW_WITH_PENDING)
+
+    exit_code = _run(["transition", "--spec-root", str(spec_root), "CP-1", "REVIEW_PASS"])
+    assert exit_code == 1
+    assert "status: ready" in (change_dir / "proposal.md").read_text(encoding="utf-8")  # 沒有被轉移
+
+    captured = capsys.readouterr()
+    assert "還有 1 個待處理項目未結案" in captured.err
+    assert "F1" in captured.err
+
+
+def test_review_pass_succeeds_when_all_findings_resolved(tmp_path):
+    spec_root, change_dir = _make_ready_change_with_review(tmp_path, REVIEW_ALL_RESOLVED)
+
+    exit_code = _run(["transition", "--spec-root", str(spec_root), "CP-1", "REVIEW_PASS"])
+    assert exit_code == 0
+    assert "status: merge_ready" in (change_dir / "proposal.md").read_text(encoding="utf-8")
+
+
+def test_review_pass_succeeds_when_review_md_absent(tmp_path):
+    """review.md 是可選檔案，不存在時 REVIEW_PASS 不受影響（不強制一定要寫）。"""
+    spec_root = tmp_path / ".spec"
+    change_dir = spec_root / "changes" / "CP-1"
+    change_dir.mkdir(parents=True)
+    (change_dir / "proposal.md").write_text(VALID_PROPOSAL.format(status="ready"), encoding="utf-8")
+    (change_dir / "tasks.md").write_text(VALID_TASKS, encoding="utf-8")
+
+    exit_code = _run(["transition", "--spec-root", str(spec_root), "CP-1", "REVIEW_PASS"])
+    assert exit_code == 0
+    assert "status: merge_ready" in (change_dir / "proposal.md").read_text(encoding="utf-8")
