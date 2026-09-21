@@ -9,6 +9,10 @@
   3. 不允許縮排的子項目（禁止巢狀清單，逼每個 task 攤平成一行）
   4. 嚴禁代碼塊標記（```）
   5. task 數量不得超過 MAX_TASKS（超過代表這個 change 該拆了）
+  6. task-id 不得是 SENTINEL_TASK_ID（範本裡的佔位符）——`specflow init`
+     產生的 tasks.md 有一行佔位範例，格式上完全合法，之前會悄悄通過整條
+     生命週期而沒人發現使用者根本沒編輯過。這裡明確攔下這個特定 task-id，
+     逼使用者至少改過一次，不能原封不動送出。
 
 用法：
     python3 task_lint.py <tasks.md> <expected-change-id>
@@ -28,6 +32,7 @@ from lib.common import frontmatter as fm  # noqa: E402
 
 MAX_TASKS = 15
 CODE_FENCE = "```"
+SENTINEL_TASK_ID = "replace-me"
 
 # desc 用 '.+?'（非貪婪）而不是 '[^(]+?'：舊版排除所有括號，導致 exists()、
 # logCase() 這類再自然不過的呼叫寫法直接被判定格式不符，而且錯誤訊息完全
@@ -92,6 +97,12 @@ def lint_text(text: str, expected_change_id: str, path: Path = None) -> LintResu
             continue
 
         task_id = m.group("task_id")
+        if task_id == SENTINEL_TASK_ID:
+            result.errors.append(
+                f"第 {lineno} 行：這是範本裡未編輯的佔位內容（task-id: '{SENTINEL_TASK_ID}'），"
+                "請換成真正的 task，不能原封不動送出"
+            )
+            continue
         if task_id in task_ids:
             result.errors.append(f"第 {lineno} 行：task-id 重複 '{task_id}'")
         task_ids.append(task_id)
