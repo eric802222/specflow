@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ALLOWED_FILES = {"proposal.md", "tasks.md"}
+ALLOWED_FILES = {"proposal.md", "tasks.md", "design.md"}
 ALLOWED_HIDDEN_FILES = {".gitkeep"}  # 唯一放行的點開頭檔案；其他一律不放過（含隱藏子目錄）
 
 
