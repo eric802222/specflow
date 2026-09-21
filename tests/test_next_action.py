@@ -112,8 +112,15 @@ def test_delivered_with_tasks_awaits_manual_signal(tmp_path):
     assert set(result["available_events"]) == {"ISSUE_FOUND", "DEV_DONE"}
 
 
-def test_ready_awaits_merge(tmp_path):
+def test_ready_awaits_review(tmp_path):
     change_dir = _make_change(tmp_path, status="ready", with_tasks=True)
+    result = next_action.compute_next(change_dir)
+    assert result["next_action"] == "await_manual_signal"
+    assert set(result["available_events"]) == {"REVIEW_PASS", "REVIEW_REJECT"}
+
+
+def test_merge_ready_awaits_merge(tmp_path):
+    change_dir = _make_change(tmp_path, status="merge_ready", with_tasks=True)
     result = next_action.compute_next(change_dir)
     assert result["next_action"] == "await_manual_signal"
     assert result["available_events"] == ["MERGED"]
@@ -316,3 +323,60 @@ def test_gate_check_blocks_when_design_md_invalid(tmp_path):
     gate = next_action.gate_check(change_dir)
     assert gate["ok"] is False
     assert gate["next_action"] == "fix_design_lint"
+
+
+VALID_REVIEW = """\
+---
+change: {change_id}
+---
+
+## 🔴 待處理（0）
+
+## Review 發現 (Findings)
+
+### ✅ F1 — 示範發現
+
+- **位置**：x
+- **問題**：x
+- **處置**：x
+"""
+
+INVALID_REVIEW = """\
+---
+change: {change_id}
+---
+
+## Review 發現 (Findings)
+
+### ⏳ F1 — 缺摘要的發現
+
+- **位置**：x
+- **問題**：x
+- **處置**：還沒結案卻寫了處置
+"""
+
+
+def test_gate_check_passes_when_review_md_absent(tmp_path):
+    """review.md 是可選檔案，不存在時完全不影響 gate_check。"""
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is True
+
+
+def test_gate_check_passes_when_review_md_valid(tmp_path):
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    change_id = change_dir.name
+    (change_dir / "review.md").write_text(VALID_REVIEW.format(change_id=change_id), encoding="utf-8")
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is True
+
+
+def test_gate_check_blocks_when_review_md_invalid(tmp_path):
+    change_dir = _make_change(tmp_path, status="delivered", with_tasks=True)
+    change_id = change_dir.name
+    (change_dir / "review.md").write_text(INVALID_REVIEW.format(change_id=change_id), encoding="utf-8")
+
+    gate = next_action.gate_check(change_dir)
+    assert gate["ok"] is False
+    assert gate["next_action"] == "fix_review_lint"
