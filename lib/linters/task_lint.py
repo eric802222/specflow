@@ -29,10 +29,14 @@ from lib.common import frontmatter as fm  # noqa: E402
 MAX_TASKS = 15
 CODE_FENCE = "```"
 
+# desc 用 '.+?'（非貪婪）而不是 '[^(]+?'：舊版排除所有括號，導致 exists()、
+# logCase() 這類再自然不過的呼叫寫法直接被判定格式不符，而且錯誤訊息完全
+# 沒點名是括號害的，是真的有人試跑時卡最久的一關。改成靠 ' (touches: ...)'
+# 這個字面字串當分界，desc 本身可以含括號，靠正則的 backtracking 正確處理。
 TASK_LINE_RE = re.compile(
     r"^- \[( |x|X)\] "
     r"(?P<task_id>[a-z0-9]+(?:-[a-z0-9]+)*): "
-    r"(?P<desc>[^(]+?)"
+    r"(?P<desc>.+?)"
     r"(?: \(touches: (?P<touches>[^)]*)\))?$"
 )
 
