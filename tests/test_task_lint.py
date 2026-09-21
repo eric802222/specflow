@@ -123,3 +123,41 @@ def test_too_many_tasks_fails():
     result = task_lint.lint_text(TOO_MANY_TASKS, "CP-153-discount-reason-visibility")
     assert not result.ok
     assert any("超過上限" in e for e in result.errors)
+
+
+def test_description_can_contain_parentheses():
+    """回歸測試：desc 欄位原本用 [^(]+? 排除所有括號，導致 exists()/logCase()
+    這類自然的 PHP 呼叫寫法直接被判定格式不符，而且錯誤訊息完全沒點名是括號
+    害的。改成用 '(touches: ...)' 這個字面字串當分界，desc 本身可以含括號。"""
+    text = (
+        "---\nchange: CP-1\n---\n\n"
+        "- [ ] verify-guard: 以 exists() 守衛 (touches: x)\n"
+        "- [x] log-case: 呼叫 logCase() 記錄\n"
+    )
+    result = task_lint.lint_text(text, "CP-1")
+    assert result.ok, result.errors
+    assert "verify-guard" in result.task_ids
+    assert "log-case" in result.task_ids
+
+
+def test_sentinel_placeholder_task_id_is_rejected():
+    """回歸測試（issue #13）：init 自動產生的 tasks.md 有一行範本佔位範例，
+    格式上完全合法，之前會悄悄通過整條生命週期而沒人發現根本沒編輯過。
+    現在這個特定 task-id（範本產生的 sentinel）要被明確擋下。"""
+    text = (
+        "---\nchange: CP-1\n---\n\n"
+        "- [ ] replace-me: 刪掉這行，換成真正的第一個 task (touches: 實際會改到的檔案路徑)\n"
+    )
+    result = task_lint.lint_text(text, "CP-1")
+    assert not result.ok
+    assert any("未編輯的佔位內容" in e for e in result.errors)
+
+
+def test_task_id_similar_to_sentinel_but_not_exact_is_fine():
+    """只擋精確符合 sentinel 的 task-id，不要誤傷剛好取名相近的真實 task。"""
+    text = (
+        "---\nchange: CP-1\n---\n\n"
+        "- [ ] replace-me-config-value: 把設定檔裡的預留值換成真值 (touches: config.yaml)\n"
+    )
+    result = task_lint.lint_text(text, "CP-1")
+    assert result.ok, result.errors
