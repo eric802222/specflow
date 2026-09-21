@@ -1,0 +1,9 @@
+{
+  "name": "specflow-review",
+  "description": "把 MR/PR 上的 code review 討論串，轉寫成 specflow 的 review.md 格式（固定欄位、checkbox 選項、摘要交叉比對）。",
+  "version": "1.0.0",
+  "author": {
+    "name": "eric802222"
+  },
+  "homepage": "https://github.com/eric802222/specflow"
+}
