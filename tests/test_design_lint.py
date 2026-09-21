@@ -1,4 +1,4 @@
-"""design_lint 的單元測試：固定欄位格式（事件/決策/取捨）+ 摘要交叉比對。"""
+"""design_lint 的單元測試：固定欄位格式、checkbox 選項、摘要交叉比對。"""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from lib.linters import design_lint  # noqa: E402
 
-OK_WITH_ALL_FIELDS = """\
+CONFIRMED_OK = """\
 ---
 change: CP-1
 ---
@@ -24,170 +24,222 @@ change: CP-1
 - **取捨**：與 Jira 原文不一致，待需求方確認
 """
 
-OK_WITHOUT_OPTIONAL_TRADEOFF = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — DB 欄位 nullable
-
-- **事件**：舊 row 無法回填理由
-- **決策**：欄位設為 nullable，不加 NOT NULL
-"""
-
-FREE_PROSE_NOT_ALLOWED = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — 用段落寫的決策
-
-這是一段自由文字，沒有用固定欄位格式，應該要被擋下來。
-"""
-
-MISSING_DECISION_FIELD = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — 只有事件沒有決策
-
-- **事件**：發生了什麼事
-"""
-
-WRONG_ORDER = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — 順序顫倒
-
-- **決策**：先寫決策
-- **事件**：後寫事件，順序錯了
-"""
-
-DUPLICATE_FIELD = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — 欄位重複
-
-- **事件**：第一次
-- **事件**：又寫了一次
-- **決策**：決策內容
-"""
-
-FIELD_TOO_LONG = """\
----
-change: CP-1
----
-
-## ⏳ 待確認（0）
-
-## 決策 (Decisions)
-
-### ✅ D1 — 欄位過長
-
-- **事件**：""" + ("很長的內容 " * 40) + """
-- **決策**：正常長度
-"""
-
-TAKEAWAY_OPTIONAL_OK_MISSING = """\
+PENDING_OK = """\
 ---
 change: CP-1
 ---
 
 ## ⏳ 待確認（1）
 
-- **D1** — 待確認
+- **D1** — 上限要多少
 
 ## 決策 (Decisions)
 
-### ⏳ D1 — 取捨可以省略
+### ⏳ D1 — 上限要多少
+
+- **事件**：業務反應理由太長難以快速瀏覽
+- **選項**：
+  - [ ] 設定最長長度
+  - [ ] 禁止使用自定義語法
+  - [ ] 其他補充：
+"""
+
+CONFIRMED_CANNOT_USE_OPTIONS = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（0）
+
+## 決策 (Decisions)
+
+### ✅ D1 — 已定案卻還留著選項
 
 - **事件**：發生了什麼事
-- **決策**：選了什麼
+- **選項**：
+  - [ ] 選項一
+  - [ ] 選項二
+"""
+
+PENDING_CANNOT_USE_DECISION = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 還沒定案卻寫了決策
+
+- **事件**：發生了什麼事
+- **決策**：其實已經想好了
+"""
+
+PENDING_TOO_FEW_OPTIONS = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 只有一個選項
+
+- **事件**：發生了什麼事
+- **選項**：
+  - [ ] 唯一的選項
+"""
+
+PENDING_MISSING_SUPPLEMENT = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 沒有其他補充選項
+
+- **事件**：發生了什麼事
+- **選項**：
+  - [ ] 選項一
+  - [ ] 選項二
+"""
+
+PENDING_MULTIPLE_CHECKED = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 一次勾兩個
+
+- **事件**：發生了什麼事
+- **選項**：
+  - [x] 選項一
+  - [x] 選項二
+  - [ ] 其他補充：
+"""
+
+PENDING_CHECKED_BUT_STATUS_UNCHANGED = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 已經勾了但狀態沒改
+
+- **事件**：發生了什麼事
+- **選項**：
+  - [x] 選項一
+  - [ ] 選項二
+  - [ ] 其他補充：
+"""
+
+PENDING_MISSING_OPTIONS_BLOCK = """\
+---
+change: CP-1
+---
+
+## ⏳ 待確認（1）
+
+- **D1** — 卡住
+
+## 決策 (Decisions)
+
+### ⏳ D1 — 完全沒有選項
+
+- **事件**：發生了什麼事
 """
 
 
-def test_all_fields_present_passes():
-    result = design_lint.lint_text(OK_WITH_ALL_FIELDS, "CP-1")
+def test_confirmed_decision_passes():
+    result = design_lint.lint_text(CONFIRMED_OK, "CP-1")
     assert result.ok, result.errors
 
 
-def test_optional_tradeoff_can_be_omitted():
-    result = design_lint.lint_text(OK_WITHOUT_OPTIONAL_TRADEOFF, "CP-1")
+def test_pending_decision_with_options_passes():
+    result = design_lint.lint_text(PENDING_OK, "CP-1")
     assert result.ok, result.errors
 
 
-def test_pending_decision_without_tradeoff_still_passes():
-    result = design_lint.lint_text(TAKEAWAY_OPTIONAL_OK_MISSING, "CP-1")
+def test_confirmed_decision_cannot_use_options_field():
+    result = design_lint.lint_text(CONFIRMED_CANNOT_USE_OPTIONS, "CP-1")
+    assert not result.ok
+    assert any("不允許使用欄位 '選項'" in e for e in result.errors)
+
+
+def test_pending_decision_cannot_use_decision_field():
+    """核心規則：還沒定案就不該假裝有答案，決策欄位只留給 ✅ 用。"""
+    result = design_lint.lint_text(PENDING_CANNOT_USE_DECISION, "CP-1")
+    assert not result.ok
+    assert any("不允許使用欄位 '決策'" in e for e in result.errors)
+
+
+def test_pending_decision_requires_min_options():
+    result = design_lint.lint_text(PENDING_TOO_FEW_OPTIONS, "CP-1")
+    assert not result.ok
+    assert any("至少要有 2 個" in e for e in result.errors)
+
+
+def test_pending_decision_requires_supplement_option():
+    result = design_lint.lint_text(PENDING_MISSING_SUPPLEMENT, "CP-1")
+    assert not result.ok
+    assert any("其他補充" in e for e in result.errors)
+
+
+def test_pending_decision_missing_options_block_fails():
+    result = design_lint.lint_text(PENDING_MISSING_OPTIONS_BLOCK, "CP-1")
+    assert not result.ok
+    assert any("必須有 '選項' 清單" in e for e in result.errors)
+
+
+def test_multiple_checked_options_fails():
+    result = design_lint.lint_text(PENDING_MULTIPLE_CHECKED, "CP-1")
+    assert not result.ok
+    assert any("勾選了 2 個" in e for e in result.errors)
+
+
+def test_checked_option_but_status_still_pending_fails():
+    """回歸測試（使用者明確要求）：勾了一個選項但狀態還是 ⏳/🚫，要被擋下來，
+    不能讓檔案同時說「還沒決定」又「已經勾了答案」這種矛盾狀態存在。"""
+    result = design_lint.lint_text(PENDING_CHECKED_BUT_STATUS_UNCHANGED, "CP-1")
+    assert not result.ok
+    assert any("已經勾選了一個選項，但狀態仍是" in e for e in result.errors)
+
+
+def test_zero_checked_options_is_fine_while_pending():
+    result = design_lint.lint_text(PENDING_OK, "CP-1")
     assert result.ok, result.errors
-
-
-def test_free_prose_is_rejected():
-    """核心規則：決策內文不能是自由段落，只能用固定欄位。"""
-    result = design_lint.lint_text(FREE_PROSE_NOT_ALLOWED, "CP-1")
-    assert not result.ok
-    assert any("不合法的內容" in e for e in result.errors)
-
-
-def test_missing_required_field_fails():
-    result = design_lint.lint_text(MISSING_DECISION_FIELD, "CP-1")
-    assert not result.ok
-    assert any("缺少必要欄位 '決策'" in e for e in result.errors)
-
-
-def test_wrong_field_order_fails():
-    result = design_lint.lint_text(WRONG_ORDER, "CP-1")
-    assert not result.ok
-    assert any("順序錯誤" in e for e in result.errors)
-
-
-def test_duplicate_field_fails():
-    result = design_lint.lint_text(DUPLICATE_FIELD, "CP-1")
-    assert not result.ok
-    assert any("重複" in e for e in result.errors)
-
-
-def test_field_too_long_fails():
-    result = design_lint.lint_text(FIELD_TOO_LONG, "CP-1")
-    assert not result.ok
-    assert any("超過上限" in e for e in result.errors)
-
-
-def test_code_fence_fails():
-    text = OK_WITH_ALL_FIELDS.replace(
-        "- **取捨**：與 Jira 原文不一致，待需求方確認",
-        "```\n不該出現\n```",
-    )
-    result = design_lint.lint_text(text, "CP-1")
-    assert not result.ok
-    assert any("代碼塊" in e for e in result.errors)
 
 
 def test_wrong_change_id_fails():
-    result = design_lint.lint_text(OK_WITH_ALL_FIELDS.replace("change: CP-1", "change: CP-999"), "CP-1")
+    result = design_lint.lint_text(CONFIRMED_OK.replace("change: CP-1", "change: CP-999"), "CP-1")
     assert not result.ok
     assert any("不一致" in e for e in result.errors)
+
+
+def test_code_fence_fails():
+    text = CONFIRMED_OK + "\n```\n不該出現\n```\n"
+    result = design_lint.lint_text(text, "CP-1")
+    assert not result.ok
+    assert any("代碼塊" in e for e in result.errors)
