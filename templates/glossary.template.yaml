@@ -3,6 +3,13 @@
 # 每個 term 定義：key（程式碼使用的識別碼）、term（中文名稱）、description，
 # 以及可選的 status 列舉。cross_spec_lint 會用這裡宣告的 status 列舉，
 # 檢查其他規格檔（logic/rules、logic/lifecycle 等）是否引用了未定義的狀態值。
+#
+# 兩種寫法都合法，可以挑一種用，也可以混用（見下方巢狀範例最後一段）：
+#
+#   1. 平舖 terms:（下面這份範例）——術語不多、不需要分組時最簡單。
+#   2. 巢狀 nodes:（範本結尾另有完整範例）——對齊 DataHub Business Glossary
+#      YAML 的 nodes/terms 結構，術語一多、需要依領域分組時再升級成這種寫法，
+#      不需要的話完全不用管它，平舖格式永久支援，不會被強迫遷移。
 
 version: 1
 
@@ -20,3 +27,27 @@ terms:
     term: <中文名稱>
     description: <一句話定義>
     status: []
+
+# ---------------------------------------------------------------------------
+# 巢狀寫法範例（DataHub-aligned，術語一多、需要依領域分組時再參考這份）
+# ---------------------------------------------------------------------------
+#
+# nodes:                          # node = 領域分組（term group），可以再巢狀 nodes:
+#   - name: <領域名稱>
+#     id: <領域識別碼>             # 選填，沒給的話用 name 當識別碼
+#     description: <這個領域是做什麼的>
+#     terms:
+#       - name: <術語顯示名稱>
+#         key: <identifier>       # 也接受 DataHub 慣用的 id 欄位當識別碼
+#         type: entity|value|enum|actor|action|external   # 選填
+#         description: <一句話定義>
+#         status: [...]           # 只有列舉／有生命週期的 entity 才需要
+#         contains: [<key>...]    # 組成關係（has-a），例如「訂單」contains「訂單明細」
+#         inherits: [<key>...]    # 子型關係（is-a），例如「VIP 會員」inherits「會員」
+#         related_terms: [<key>] # 純粹相關，不是階層也不是組成
+#     nodes:                      # 這個領域底下還可以再分子領域
+#       - name: <子領域名稱>
+#         terms: [...]
+#
+# 平舖 terms: 跟巢狀 nodes: 可以在同一份檔案並存——頂層的平舖 terms:
+# 代表「還沒分類到任何領域」的術語，nodes: 底下才是已分組的。
