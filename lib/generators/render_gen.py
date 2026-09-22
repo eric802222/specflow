@@ -11,6 +11,8 @@ DEFAULT_DSL_CONFIG 裡的預設值，不是寫死不能改——<spec-root>/dsl.
     schema）或別的線框圖渲染器，現在只要寫一份 dsl.yaml 就能整層換掉，不用
     碰 render_gen.py 一行程式碼。
 
+  - story/*.md    → story.md 解析 YAML frontmatter 渲染成 Given/When/Then 卡片；
+                    flow_*.md 渲染成 Mermaid 圖表；都不需要外部工具
   - db/*.dbml     → 預設呼叫 dbml-renderer 產生 ER 圖 SVG（可透過 dsl.yaml 換工具）
   - api/*.tsp     → 呼叫 TypeSpec compiler 編譯成 OpenAPI3，接 Redoc 渲染成互動式 API 文件
   - ui/*.wf.yaml  → 預設呼叫 wireframe-lofi 產生線框圖 HTML（可透過 dsl.yaml 換工具）
@@ -49,6 +51,8 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+from lib.common import frontmatter as fm  # noqa: E402
+
 CSS = """
 :root { color-scheme: light dark; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -67,9 +71,21 @@ ul.category-list li { padding: 4px 0; }
 section { margin-bottom: 32px; }
 .fallback-note { border: 1px solid #f803; background: #f801; padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }
 .fallback-note pre { margin: 8px 0 0; background: #8882; }
+.story-card { border: 1px solid #8884; border-radius: 10px; padding: 14px 18px; margin: 16px 0; }
+.story-card.child { margin-left: 24px; border-style: dashed; }
+.story-id { font-family: monospace; font-size: 0.85em; opacity: 0.7; }
+.story-gwt dt { font-weight: 600; margin-top: 8px; }
+.story-gwt dd { margin: 2px 0 0; }
+.status-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.78em; font-weight: 600; }
+.status-draft { background: #8882; }
+.status-confirm { background: #1d71b822; color: #1d71b8; }
+.status-living { background: #1a7f3722; color: #1a7f37; }
+.refs-list a { display: block; }
 """
 
-CATEGORY_LABELS = {"glossary": "Glossary", "db": "DB", "api": "API", "ui": "UI", "logic": "Logic"}
+CATEGORY_LABELS = {
+    "glossary": "Glossary", "story": "Story", "db": "DB", "api": "API", "ui": "UI", "logic": "Logic"
+}
 
 # 內建預設值——db/ui 兩層的 render_command 是「可覆寫」的建議值，不是唯一解。
 # api 沒有 render_command（tsp compile+Redoc 這個策略太特化，沒有簡單的
@@ -77,6 +93,17 @@ CATEGORY_LABELS = {"glossary": "Glossary", "db": "DB", "api": "API", "ui": "UI",
 # render_command 裡的 {src}／{out} 會被實際路徑取代；ui 預設不需要 {out}
 # （wireframe-lofi 的慣例是輸出跟輸入同目錄同檔名，見 _try_render_command）。
 DEFAULT_DSL_CONFIG = {
+    "story": {
+        "pattern": "*.md",
+        # 不需要外部工具：story.md 直接解析 YAML frontmatter 渲染成卡片，
+        # flow_*.md（檔名前綴是判斷依據，不是可覆寫設定——這是這個層本身
+        # 的命名慣例，不是外部工具的選型問題）渲染成 Mermaid 圖表。
+        "install_note": (
+            "這不是工具沒裝的問題——story.md 的 frontmatter 格式不符預期"
+            "（缺 stories/status/goal 等必要欄位）。跑這個確認具體哪裡錯：\n"
+            "python3 lib/linters/story_lint.py <story.md 路徑>"
+        ),
+    },
     "db": {
         "pattern": "*.dbml",
         "render_command": ["npx", "--yes", "@softwaretechnik/dbml-renderer", "-i", "{src}", "-o", "{out}"],
@@ -98,7 +125,7 @@ DEFAULT_DSL_CONFIG = {
         "pattern": "*.wf.yaml",
         # None 代表用內建的 wireframe-lofi 探索邏輯（SPECFLOW_WIREFRAME_LOFI 環境變數
         # 或 PATH 上找 wfyaml.py）。設成一份 command 樣板即可換成任何其他線框圖工具，
-        # 假設是同一種輸出慣例：跟輸入同目錄、同檔名、副檔名換成 .html。
+        # 假設是同一種輸出慣例：跟輸入同目錄同檔名、副檔名換成 .html。
         "render_command": None,
         "install_note": (
             "git clone https://github.com/eric802222/wireframe-lofi\n"
@@ -112,6 +139,7 @@ DEFAULT_DSL_CONFIG = {
 }
 
 REDOC_CDN = "https://cdn.jsdelivr.net/npm/redoc@2.1.3/bundles/redoc.standalone.js"
+MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
 
 
 def load_dsl_config(spec_root: Path) -> dict:
@@ -358,6 +386,85 @@ def _ui_page(title: str, src_path: Path, ui_root: Path, out_path: Path, back_hre
     out_path.write_text(_raw_page(title, raw, back_href, cat_config=cat_config, rendered=False), encoding="utf-8")
 
 
+def _story_entry_html(entry: dict, is_child: bool = False) -> str:
+    entry_id = html_lib.escape(str(entry.get("id", "")))
+    given = html_lib.escape(str(entry.get("given", "")))
+    when = html_lib.escape(str(entry.get("when", "")))
+    then = html_lib.escape(str(entry.get("then", "")))
+
+    body = (
+        f'<div class="story-id">{entry_id}</div>'
+        f'<dl class="story-gwt">'
+        f'<dt>Given</dt><dd>{given}</dd>'
+        f'<dt>When</dt><dd>{when}</dd>'
+        f'<dt>Then</dt><dd>{then}</dd>'
+        f'</dl>'
+    )
+
+    children = entry.get("children") or []
+    children_html = "".join(_story_entry_html(c, is_child=True) for c in children if isinstance(c, dict))
+
+    css_class = "story-card child" if is_child else "story-card"
+    return f'<div class="{css_class}">{body}</div>{children_html}'
+
+
+def _story_page(title: str, src_path: Path, back_href: str, cat_config: dict) -> str:
+    """story.md 直接解析 YAML frontmatter 渲染成卡片，不需要任何外部工具——
+    Given/When/Then 結構化資料本身就是渲染的來源，跟 logic 決策表是同一個道理。
+    frontmatter 解析失敗或缺必要欄位時退回顯示原始內容（並算進「未渲染」統計），
+    不強制先跑過 story_lint——lint 是給 gate_check 用的把關機制，render 只是
+    盡力而為的展示層。
+    """
+    text = src_path.read_text(encoding="utf-8")
+    data, _body, error = fm.load_frontmatter_data(text)
+    if error or not isinstance(data, dict) or not isinstance(data.get("stories"), list):
+        return _raw_page(title, text, back_href, cat_config=cat_config, rendered=False)
+
+    status = str(data.get("status", ""))
+    status_badge = f'<span class="status-badge status-{html_lib.escape(status)}">{html_lib.escape(status)}</span>'
+
+    goal_html = f"<p><strong>Goal：</strong>{html_lib.escape(str(data.get('goal', '')))}</p>"
+
+    refs = data.get("refs") or []
+    refs_html = ""
+    if refs:
+        items = "".join(
+            f'<li><a href="{html_lib.escape(str(r))}" target="_blank" rel="noopener">{html_lib.escape(str(r))}</a></li>'
+            for r in refs
+        )
+        refs_html = f'<div><strong>Refs</strong><ul class="refs-list">{items}</ul></div>'
+
+    external_key = data.get("external_key")
+    key_html = f"<p><strong>Ticket：</strong>{html_lib.escape(str(external_key))}</p>" if external_key else ""
+
+    stories_html = "".join(
+        _story_entry_html(s) for s in data["stories"] if isinstance(s, dict)
+    )
+
+    header = f"<p>{status_badge}</p>{key_html}{goal_html}{refs_html}"
+    return _page(title, header + stories_html, back_href=back_href)
+
+
+_MERMAID_FENCE_RE = re.compile(r"^```mermaid\s*\n(.*?)\n```\s*$", re.DOTALL)
+
+
+def _flow_page(title: str, src_path: Path, back_href: str) -> str:
+    """flow_*.md 是 story 之後、plan 之前的動線對齊圖（Mermaid），不需要外部
+    渲染工具——瀏覽器端跑 mermaid.js 直接畫。接受檔案內容是包在 ```mermaid
+    fence 裡（標準 Markdown 寫法）或是純 Mermaid 原始碼兩種形式。
+    """
+    text = src_path.read_text(encoding="utf-8").strip()
+    m = _MERMAID_FENCE_RE.match(text)
+    diagram = m.group(1) if m else text
+
+    body = (
+        f'<pre class="mermaid">{html_lib.escape(diagram)}</pre>'
+        f'<script src="{MERMAID_CDN}"></script>'
+        f'<script>mermaid.initialize({{ startOnLoad: true }});</script>'
+    )
+    return _page(title, body, back_href=back_href)
+
+
 def _logic_page(title: str, src_path: Path, back_href: str) -> str:
     """決策規則本身就是結構化資料，不需要外部工具，直接渲染成真正的決策表格
     （列 = 規則、欄 = when/then 用到的各個 key）。"""
@@ -405,7 +512,7 @@ def _index_page(index: dict) -> str:
         lis = "".join(f'<li><a href="{href}">{href}</a></li>' for href in items)
         return f'<section><h2>{title}</h2><ul class="category-list">{lis}</ul></section>'
 
-    body = "".join(_section(k) for k in ("glossary", "db", "api", "ui", "logic"))
+    body = "".join(_section(k) for k in ("glossary", "story", "db", "api", "ui", "logic"))
     return _page("規格目錄", body, back_href=None)
 
 
@@ -415,7 +522,7 @@ def _index_page(index: dict) -> str:
 
 def render(spec_root: Path, out_dir: Path) -> dict:
     """把 <spec-root>/specs/ 渲染成 out_dir 底下的一組 HTML，回傳索引結構
-    {"glossary": "glossary.html" | None, "db": [...], "api": [...], "ui": [...], "logic": [...]}。
+    {"glossary": "glossary.html" | None, "story": [...], "db": [...], "api": [...], "ui": [...], "logic": [...]}。
     每個分類實際用哪個副檔名 pattern、呼叫哪個渲染指令、顯示哪段安裝說明，
     先讀 <spec-root>/dsl.yaml（不存在就用內建預設值）。
     """
@@ -423,7 +530,7 @@ def render(spec_root: Path, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     dsl_config = load_dsl_config(spec_root)
 
-    index = {"glossary": None, "db": [], "api": [], "ui": [], "logic": []}
+    index = {"glossary": None, "story": [], "db": [], "api": [], "ui": [], "logic": []}
 
     glossary_path = specs_dir / "glossary.yaml"
     if glossary_path.exists():
@@ -451,7 +558,12 @@ def render(spec_root: Path, out_dir: Path) -> dict:
             back_href = Path(os.path.relpath(out_dir / "index.html", start=out_path.parent)).as_posix()
             title = f"{cat}/{rel.as_posix()}"
 
-            if cat == "db":
+            if cat == "story":
+                if src_path.name.startswith("flow_"):
+                    out_path.write_text(_flow_page(title, src_path, back_href), encoding="utf-8")
+                else:
+                    out_path.write_text(_story_page(title, src_path, back_href, cat_config), encoding="utf-8")
+            elif cat == "db":
                 _db_page(title, src_path, out_path, back_href, cat_config)
             elif cat == "api":
                 _api_page(title, src_path, out_path, back_href, cat_config)
