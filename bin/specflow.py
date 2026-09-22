@@ -21,6 +21,7 @@ targets 的 .spec/ 資料夾可以在任何 repo 裡，不需要跟 specflow 自
     specflow lint [paths-or-change-id]          對 proposal 執行 lint（預設: <spec-root>/changes/*/proposal.md）
     specflow next <change-id-or-path>           算出這個 change 下一步該做什麼（JSON 輸出）
     specflow transition <change-id-or-path> <event> [--auto-commit] [--commit-ref sha]  套用一次合法的狀態轉移
+    specflow archive <change-id-or-path> [--auto-commit]  把已到終點狀態的 change 搬進 changes/archive/<id>/
     specflow prompt <change-id-or-path> [--base ref]   印出交付給 AI 的完整指令（純輸出，不落地成檔案；--base 預設自動偵測）
     specflow coverage                            純資訊：glossary 實體的檢查覆蓋率（不會擋流程）
     specflow render [--out dist]                 把 specs/ 渲染成渲染後的產物（目錄頁 + 各 DSL 內容）
@@ -33,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -47,6 +49,7 @@ from lib.common.atomic_write import atomic_write_text  # noqa: E402
 from lib.generators import prompt_gen  # noqa: E402
 from lib.generators import render_gen  # noqa: E402
 from lib.workflow import next_action  # noqa: E402
+from lib.workflow import lifecycle as lifecycle_mod  # noqa: E402
 
 TEMPLATE_PATHS = {
     "feature": REPO_ROOT / "templates" / "proposal.template.md",
@@ -101,10 +104,13 @@ def resolve_spec_root(explicit: str = None) -> Path:
 
 def resolve_change_dir(spec_root: Path, ref: str) -> Path:
     """優先把 ref 當成 <spec-root>/changes/ 底下的 change-id 解析；只有在那裡不存在、
-    且 ref 本身剛好是一個存在的目錄時，才退回當成字面路徑使用。
+    且 ref 本身剛好是一個存在的目錄時，才退回當成字面路徑使用；再退回
+    <spec-root>/changes/archive/<id>（封存後的 change 依然要查得到）。
 
     這個順序很重要：如果反過來優先信任字面路徑，遇到 cwd 底下剛好有個跟
     change-id 同名、但完全無關的資料夾時，會意外撿到錯的東西，還不會有任何警告。
+    archive fallback 刻意放在字面路徑之後——不能因為多支援了封存查詢，就
+    反過來破壞原本「不優先信任字面路徑」這條防呆邏輯。
     """
     under_spec_root = spec_root / "changes" / ref
     if under_spec_root.is_dir():
@@ -113,6 +119,10 @@ def resolve_change_dir(spec_root: Path, ref: str) -> Path:
     as_path = Path(ref)
     if as_path.is_dir():
         return as_path
+
+    archived = spec_root / "changes" / "archive" / ref
+    if archived.is_dir():
+        return archived
 
     return under_spec_root
 
@@ -351,6 +361,17 @@ def cmd_transition(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if lc.is_final(target):
+        # README 畫的目錄慣例裡，終點狀態的 change 該搬進 changes/archive/<id>/，
+        # 但這一步從來沒有任何流程真的提醒過——逼人回頭翻 README 才會發現。
+        # 跟 warn_if_no_specs_touch 是同一個道理：把口頭約定變成流程裡看得到的
+        # 一步，不是純靠記性。
+        print(
+            f"提示：{change_id} 已到終點狀態 '{target}'，"
+            f"可以跑 `specflow archive {change_id}` 封存。",
+            file=sys.stderr,
+        )
+
     if args.auto_commit:
         try:
             subprocess.run(
@@ -369,6 +390,62 @@ def cmd_transition(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
 
+    return 0
+
+
+def cmd_archive(args: argparse.Namespace) -> int:
+    """把一個已到終點狀態的 change，從 changes/<id>/ 搬到 changes/archive/<id>/。
+
+    README 畫過這個目錄慣例，但一直沒有任何程式碼真的執行它——封存有實際效果，
+    不是美觀問題：`cmd_lint` 無參數時只掃 `changes/*/proposal.md`（單層 glob），
+    搬進 archive/ 之後會自動退出 lint 掃描範圍，repo 活久了才不會每次 lint 都在
+    重複驗證早就 applied 的東西。這個機制本來就存在，只是沒有人去觸發它。
+    """
+    spec_root = resolve_spec_root(args.spec_root)
+    change_dir = resolve_change_dir(spec_root, args.change)
+    lifecycle_path = resolve_lifecycle_path(spec_root)
+    lc = lifecycle_mod.load_lifecycle(lifecycle_path)
+
+    if not change_dir.is_dir():
+        print(f"找不到 change：{change_dir}", file=sys.stderr)
+        return 1
+
+    fm_data = proposal_lint.read_frontmatter(change_dir / "proposal.md")
+    status = fm_data.get("status") if isinstance(fm_data, dict) else None
+
+    if not status or not lc.has_state(status) or not lc.is_final(status):
+        print(
+            f"擋下封存：狀態 '{status}' 不是終點狀態，只有 final: true 的狀態"
+            f"（{sorted(s for s in lc.states if lc.is_final(s))}）可以封存",
+            file=sys.stderr,
+        )
+        return 1
+
+    archive_dir = change_dir.parent / "archive"
+    target = archive_dir / change_dir.name
+    if target.exists():
+        print(f"封存目標已存在，不覆寫：{target}", file=sys.stderr)
+        return 1
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.auto_commit:
+        try:
+            subprocess.run(
+                ["git", "mv", str(change_dir), str(target)],
+                cwd=str(change_dir.parent), check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", f"specflow: archive {change_dir.name}"],
+                cwd=str(change_dir.parent), check=True, capture_output=True,
+            )
+            print(f"已用 git mv 封存並 commit：{target}")
+            return 0
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            print(f"警告：git mv 失敗（{exc}），改用純檔案系統搬移", file=sys.stderr)
+
+    shutil.move(str(change_dir), str(target))
+    print(f"已封存：{target}")
     return 0
 
 
@@ -536,6 +613,18 @@ def build_parser() -> argparse.ArgumentParser:
     root_parser = subparsers.add_parser("root", help="印出目前解析到的 --spec-root（除錯用）")
     _add_spec_root_arg(root_parser)
     root_parser.set_defaults(func=cmd_root)
+
+    archive_parser = subparsers.add_parser(
+        "archive", help="把已到終點狀態（final: true）的 change 從 changes/<id>/ 搬到 changes/archive/<id>/"
+    )
+    _add_spec_root_arg(archive_parser)
+    archive_parser.add_argument("change", help="change-id 或實際路徑")
+    archive_parser.add_argument(
+        "--auto-commit",
+        action="store_true",
+        help="用 git mv 搬移並自動 commit，而不是只動檔案系統（跟 transition --auto-commit 同一套慣例）",
+    )
+    archive_parser.set_defaults(func=cmd_archive)
 
     coverage_parser = subparsers.add_parser(
         "coverage", help="純資訊：glossary.yaml 裡每個實體被 cross_spec_lint 檢查到哪幾層（不會擋任何流程）"
