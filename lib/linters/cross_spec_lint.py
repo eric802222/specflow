@@ -50,15 +50,27 @@ class CrossSpecResult:
         return not self.errors
 
 
+def _iter_glossary_terms(node: dict):
+    """遞迴走訪 glossary 的巢狀 nodes[].terms（DataHub-aligned Business Glossary
+    YAML 結構），也相容平舖的頂層 terms:——node 字典跟頂層 data 字典形狀相同
+    （都可能同時有 terms/nodes 兩個 key），所以同一段邏輯可以直接遞迴用在兩者上，
+    不用分別寫一份平舖版跟一份巢狀版。"""
+    for term in node.get("terms", []) or []:
+        yield term
+    for child in node.get("nodes", []) or []:
+        yield from _iter_glossary_terms(child)
+
+
 def load_glossary_status_map(glossary_path: Path) -> dict:
-    """回傳 {term_key: {允許的 status 值...}}。"""
+    """回傳 {term_key: {允許的 status 值...}}。term 識別碼優先讀 key（specflow
+    既有欄位），沒有的話退回讀 id（DataHub 巢狀格式常用這個欄位名）。"""
     if yaml is None:
         raise RuntimeError("需要 pyyaml 才能解析 glossary.yaml")
 
     data = yaml.safe_load(glossary_path.read_text(encoding="utf-8")) or {}
     status_map = {}
-    for term in data.get("terms", []) or []:
-        key = term.get("key")
+    for term in _iter_glossary_terms(data):
+        key = term.get("key") or term.get("id")
         statuses = term.get("status") or []
         if key:
             status_map[key] = set(statuses)
