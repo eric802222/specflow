@@ -333,3 +333,119 @@ def test_logic_renders_real_decision_table(tmp_path):
     assert "pending_approval" in html
     assert "approved" in html
     assert "rejected" in html
+
+
+# ---------------------------------------------------------------------------
+# Story / Flow：Given/When/Then 需求意圖格式渲染
+# ---------------------------------------------------------------------------
+
+VALID_STORY = """\
+---
+name: "Trade-In 送審流程"
+type: story
+status: confirm
+external_key: INTCUSSS-700
+refs:
+  - https://qnap-jira.qnap.com.tw/browse/INTCUSSS-700
+goal: 業務主管審核時看不到申請理由，需要補上
+stories:
+  - id: trade_in_submit_with_reason
+    given: 客服在 myRMA 送出 Trade-In 申請
+    when: 填寫申請理由並送出
+    then: 審核頁面能看到這次申請的理由
+    children:
+      - id: trade_in_submit_with_reason.reason_too_short
+        given: 客服在送出申請時
+        when: 理由字數不足 20 字
+        then: 系統擋下並提示字數不足
+---
+"""
+
+FLOW_MERMAID = """\
+```mermaid
+sequenceDiagram
+    participant CS as 客服
+    participant SP as Sales Portal
+    CS->>SP: 送出申請
+    SP-->>CS: 顯示審核結果
+```
+"""
+
+
+def test_story_page_renders_given_when_then_cards(tmp_path):
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs" / "story").mkdir(parents=True)
+    (spec_root / "specs" / "story" / "trade-in.story.md").write_text(VALID_STORY, encoding="utf-8")
+    out_dir = tmp_path / "dist"
+
+    index = render_gen.render(spec_root, out_dir)
+
+    assert index["story"] == ["story/trade-in.story.html"]
+    html = (out_dir / "story" / "trade-in.story.html").read_text(encoding="utf-8")
+    assert "還沒渲染成產物" not in html
+    assert "trade_in_submit_with_reason" in html
+    assert "客服在 myRMA 送出 Trade-In 申請" in html
+    assert "status-confirm" in html
+    assert "trade_in_submit_with_reason.reason_too_short" in html
+    assert "story-card child" in html  # children 有縮排樣式
+    assert "INTCUSSS-700" in html
+    assert "qnap-jira.qnap.com.tw" in html
+
+
+def test_story_page_falls_back_on_malformed_content(tmp_path):
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs" / "story").mkdir(parents=True)
+    (spec_root / "specs" / "story" / "broken.story.md").write_text(
+        "---\nname: 缺東缺西\n---\n", encoding="utf-8"
+    )
+    out_dir = tmp_path / "dist"
+
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "story" / "broken.story.html").read_text(encoding="utf-8")
+    assert "還沒渲染成產物" in html
+    assert "story_lint.py" in html
+
+
+def test_flow_page_renders_mermaid_from_fenced_content(tmp_path):
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs" / "story").mkdir(parents=True)
+    (spec_root / "specs" / "story" / "flow_trade_in_submit.md").write_text(FLOW_MERMAID, encoding="utf-8")
+    out_dir = tmp_path / "dist"
+
+    index = render_gen.render(spec_root, out_dir)
+
+    assert index["story"] == ["story/flow_trade_in_submit.html"]
+    html = (out_dir / "story" / "flow_trade_in_submit.html").read_text(encoding="utf-8")
+    assert '<pre class="mermaid">' in html
+    assert "sequenceDiagram" in html
+    assert "```mermaid" not in html  # fence 標記本身要被剝掉，只留純 Mermaid 原始碼
+    assert "mermaid.min.js" in html
+    assert "mermaid.initialize" in html
+
+
+def test_flow_page_accepts_unfenced_mermaid_source(tmp_path):
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs" / "story").mkdir(parents=True)
+    (spec_root / "specs" / "story" / "flow_bare.md").write_text(
+        "flowchart TD\n  A --> B\n", encoding="utf-8"
+    )
+    out_dir = tmp_path / "dist"
+
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "story" / "flow_bare.html").read_text(encoding="utf-8")
+    assert "flowchart TD" in html
+
+
+def test_story_and_flow_coexist_in_same_directory(tmp_path):
+    spec_root = tmp_path / ".spec"
+    story_dir = spec_root / "specs" / "story"
+    story_dir.mkdir(parents=True)
+    (story_dir / "trade-in.story.md").write_text(VALID_STORY, encoding="utf-8")
+    (story_dir / "flow_trade_in_submit.md").write_text(FLOW_MERMAID, encoding="utf-8")
+    out_dir = tmp_path / "dist"
+
+    index = render_gen.render(spec_root, out_dir)
+
+    assert set(index["story"]) == {"story/trade-in.story.html", "story/flow_trade_in_submit.html"}
