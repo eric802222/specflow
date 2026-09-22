@@ -449,3 +449,84 @@ def test_story_and_flow_coexist_in_same_directory(tmp_path):
     index = render_gen.render(spec_root, out_dir)
 
     assert set(index["story"]) == {"story/trade-in.story.html", "story/flow_trade_in_submit.html"}
+
+
+# ---------------------------------------------------------------------------
+# glossary.yaml 巢狀 nodes（DataHub-aligned Business Glossary，issue：PROP-GLOSSARY-HIERARCHY）
+# ---------------------------------------------------------------------------
+
+NESTED_GLOSSARY = """\
+version: "1"
+source: helpdesk_spec
+nodes:
+  - name: 客服工單
+    id: ticket-domain
+    description: 客服工單相關術語
+    terms:
+      - name: 工單
+        key: ticket
+        type: entity
+        description: 一張客服請求
+        status: [open, pending, closed]
+        contains: [ticket_comment]
+    nodes:
+      - name: SLA
+        id: sla-sub
+        terms:
+          - name: 回應時限
+            key: response_sla
+            type: value
+            related_terms: [ticket]
+"""
+
+
+def test_nested_glossary_renders_domain_sections(tmp_path):
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs").mkdir(parents=True)
+    (spec_root / "specs" / "glossary.yaml").write_text(NESTED_GLOSSARY, encoding="utf-8")
+    out_dir = tmp_path / "dist"
+
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "glossary.html").read_text(encoding="utf-8")
+    assert "<h2>客服工單</h2>" in html
+    assert "<h3>SLA</h3>" in html  # 子 node 標題層級跟著深度遞增
+    assert "客服工單相關術語" in html  # node 的 description
+    assert "ticket" in html
+    assert "entity" in html  # type 欄
+    assert "組成：ticket_comment" in html  # contains 關係
+    assert "相關：ticket" in html  # related_terms 關係
+    assert "response_sla" in html
+
+
+def test_flat_glossary_unaffected_by_nested_rendering_logic(tmp_path):
+    """回歸測試：既有平舖 glossary（沒有 nodes: key）走的仍然是原本的三欄
+    表格，不會因為新增巢狀支援就被迫多長出 type/notes 欄。"""
+    spec_root = _make_spec_root(tmp_path)
+    out_dir = tmp_path / "dist"
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "glossary.html").read_text(encoding="utf-8")
+    assert "<h2>" not in html  # 平舖模式不分區、沒有 node 標題
+    assert "<th>type</th>" not in html
+
+
+def test_glossary_with_both_top_level_terms_and_nodes(tmp_path):
+    """DataHub 格式允許頂層同時有平舖 terms: 跟 nodes:——兩者並存時都要
+    顯示，不能因為用了 nodes 就把頂層平舖項目吃掉。"""
+    mixed = NESTED_GLOSSARY.replace(
+        "nodes:\n",
+        "terms:\n  - name: 未分組術語\n    key: ungrouped_term\n    type: value\nnodes:\n",
+        1,
+    )
+    spec_root = tmp_path / ".spec"
+    (spec_root / "specs").mkdir(parents=True)
+    (spec_root / "specs" / "glossary.yaml").write_text(mixed, encoding="utf-8")
+    out_dir = tmp_path / "dist"
+
+    render_gen.render(spec_root, out_dir)
+
+    html = (out_dir / "glossary.html").read_text(encoding="utf-8")
+    assert "未分組" in html
+    assert "ungrouped_term" in html
+    assert "客服工單" in html  # nodes 底下的內容依然存在
