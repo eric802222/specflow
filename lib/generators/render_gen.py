@@ -23,8 +23,9 @@ DEFAULT_DSL_CONFIG 裡的預設值，不是寫死不能改——<spec-root>/dsl.
 工具、下什麼指令」的具體說明（同樣可被 dsl.yaml 覆寫），不會讓整個 `specflow
 render` 因為某一層渲染失敗就整個掛掉。
 
-glossary.yaml 不需要外部工具，直接渲染成表格；這是唯一的例外，因為它的結構本來就
-簡單到不需要借助任何渲染引擎，也沒有「換一種 DSL」的問題。
+glossary.yaml 不需要外部工具，直接渲染成表格——支援兩種寫法：平舖 terms:
+（既有格式，永久支援不強迫遷移）跟 DataHub-aligned 的巢狀 nodes:（術語一多、
+需要依領域分組時再升級成這種寫法，見 _glossary_page）。
 
 用法：
     python3 render_gen.py <spec-root> <out-dir>
@@ -318,20 +319,87 @@ def _try_render_ui(render_command, src_path: Path, ui_root: Path) -> str:
 # 各分類的頁面產生器
 # ---------------------------------------------------------------------------
 
+def _flat_term_row(t: dict) -> str:
+    key = html_lib.escape(str(t.get("key", "")))
+    term = html_lib.escape(str(t.get("term", "")))
+    status = ", ".join(html_lib.escape(str(s)) for s in (t.get("status") or []))
+    return f"<tr><td><code>{key}</code></td><td>{term}</td><td>{status}</td></tr>"
+
+
+def _nested_term_row(t: dict) -> str:
+    key = html_lib.escape(str(t.get("key") or t.get("id") or ""))
+    name = html_lib.escape(str(t.get("name") or t.get("term") or ""))
+    term_type = html_lib.escape(str(t.get("type") or ""))
+    status = ", ".join(html_lib.escape(str(s)) for s in (t.get("status") or []))
+
+    notes = []
+    if t.get("description"):
+        notes.append(html_lib.escape(str(t["description"])))
+    if t.get("contains"):
+        notes.append("組成：" + ", ".join(html_lib.escape(str(x)) for x in t["contains"]))
+    if t.get("inherits"):
+        notes.append("子型於：" + ", ".join(html_lib.escape(str(x)) for x in t["inherits"]))
+    if t.get("related_terms"):
+        notes.append("相關：" + ", ".join(html_lib.escape(str(x)) for x in t["related_terms"]))
+
+    return (
+        f"<tr><td><code>{key}</code></td><td>{name}</td><td>{term_type}</td>"
+        f"<td>{status}</td><td>{'　'.join(notes)}</td></tr>"
+    )
+
+
+def _render_glossary_node(node: dict, depth: int = 1) -> str:
+    """遞迴渲染一個 DataHub-aligned GlossaryNode：標題 + 這個 node 直屬的
+    terms 表格（含 type／關係欄），再遞迴渲染子 nodes。depth 只影響標題層級，
+    巢狀太深時封頂在 h6，不會渲染出不合法的 heading tag。"""
+    h_tag = f"h{min(depth + 1, 6)}"
+    name = html_lib.escape(str(node.get("name") or node.get("id") or ""))
+    parts = [f"<{h_tag}>{name}</{h_tag}>"]
+
+    description = node.get("description")
+    if description:
+        parts.append(f'<p class="empty">{html_lib.escape(str(description))}</p>')
+
+    terms = node.get("terms") or []
+    if terms:
+        rows = "".join(_nested_term_row(t) for t in terms)
+        parts.append(
+            "<table><thead><tr><th>key</th><th>term</th><th>type</th><th>status</th><th>notes</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+
+    for child in node.get("nodes") or []:
+        parts.append(_render_glossary_node(child, depth=depth + 1))
+
+    return "".join(parts)
+
+
 def _glossary_page(glossary_path: Path) -> str:
     if yaml is None:
         raise RuntimeError("需要 pyyaml 才能渲染 glossary.yaml")
 
     data = yaml.safe_load(glossary_path.read_text(encoding="utf-8")) or {}
+    nodes = data.get("nodes")
+
+    if nodes:
+        # DataHub-aligned 巢狀格式：依領域分區渲染，每個 node 自己是一個小節，
+        # 標題層級隨巢狀深度遞增。頂層如果同時還有平舖 terms:（node 跟 terms
+        # 並存），一併顯示在最前面，不會因為用了 nodes 就吃掉原本的平舖項目。
+        sections = []
+        top_terms = data.get("terms") or []
+        if top_terms:
+            rows = "".join(_nested_term_row(t) for t in top_terms)
+            sections.append(
+                "<h2>（未分組）</h2>"
+                "<table><thead><tr><th>key</th><th>term</th><th>type</th><th>status</th><th>notes</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table>"
+            )
+        sections.extend(_render_glossary_node(n, depth=1) for n in nodes)
+        return _page("Glossary", "".join(sections), back_href="index.html")
+
+    # 平舖格式——完全沿用原本的邏輯與欄位，既有專案不改一字仍正常渲染。
     terms = data.get("terms", []) or []
-
-    rows = []
-    for t in terms:
-        key = html_lib.escape(str(t.get("key", "")))
-        term = html_lib.escape(str(t.get("term", "")))
-        status = ", ".join(html_lib.escape(str(s)) for s in (t.get("status") or []))
-        rows.append(f"<tr><td><code>{key}</code></td><td>{term}</td><td>{status}</td></tr>")
-
+    rows = [_flat_term_row(t) for t in terms]
     body = (
         "<table><thead><tr><th>key</th><th>term</th><th>status</th></tr></thead>"
         f"<tbody>{''.join(rows) if rows else '<tr><td colspan=3 class=empty>尚未定義任何實體</td></tr>'}</tbody></table>"
